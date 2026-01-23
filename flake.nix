@@ -1,65 +1,93 @@
 {
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
-    flake-utils.url = "github:numtide/flake-utils";
+    nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
   };
 
   outputs =
-    { self, nixpkgs, flake-utils, ... }:
-    flake-utils.lib.eachDefaultSystem (system:
-      let
-        pkgs = import nixpkgs { inherit system; };
+    inputs@{ self, flake-parts, ... }:
+    let
+      inherit (cargoToml.package) name;
+      cargoToml = builtins.fromTOML (builtins.readFile ./Cargo.toml);
+      version = "${cargoToml.package.version}-${self.shortRev or self.dirtyShortRev or "unknown"}";
+    in
+    flake-parts.lib.mkFlake { inherit inputs; } (
+      { withSystem, ... }:
+      {
+        systems = [
+          "x86_64-linux"
+          "aarch64-linux"
+        ];
 
-        cargo_version =
-          (builtins.fromTOML (builtins.readFile (self + "/Cargo.toml"))).package.version;
-        version = "${cargo_version}-${self.shortRev or self.dirtyShortRev or "unknown"}";
+        perSystem =
+          { pkgs, ... }:
+          {
+            devShells = {
+              # nix develop
+              default = pkgs.mkShell {
+                name = "stasis-devshell";
+                nativeBuildInputs = with pkgs; [
+                  rustc
+                  cargo
+                  git
+                  pkg-config
+                  wayland
+                  wayland-protocols
+                  dbus
+                ];
+              };
 
-        stasis = pkgs.rustPlatform.buildRustPackage {
-          pname = "stasis";
-          inherit version;
-          src = ./.;
+              RUSTFLAGS = "-C target-cpu=native";
 
-          cargoLock = {
-            lockFile = ./Cargo.lock;
+              shellHook = ''
+                echo "Entering stasis dev shell — run: cargo build, cargo run, or nix build .#stasis"
+              '';
+            };
+
+            packages = rec {
+              default = pkgs.callPackage ./nix { inherit version name; };
+              stasis = default;
+            };
           };
 
-          # Keep this: common + harmless, helps with any sys crates
-          nativeBuildInputs = [ pkgs.pkg-config ];
+        flake = {
+          nixosModules = rec {
+            stasis = default;
 
-          # New Stasis: Wayland + optional D-Bus integration (zbus)
-          buildInputs = [
-            pkgs.wayland
-            pkgs.wayland-protocols
-            pkgs.dbus
-          ];
+            default =
+              { pkgs, ... }:
+              let
+                module = import ./nix/module.nix {
+                  package = withSystem pkgs.stdenv.hostPlatform.system ({ config, ... }: config.packages.default);
+                };
+              in
+              {
+                imports = [ module ];
+              };
+          };
 
-          # Optional; fine to keep for local perf, but remove if you want reproducible binaries
-          RUSTFLAGS = "-C target-cpu=native";
-        };
-      in
-      {
-        packages.stasis = stasis;
-        packages.default = stasis;
+          homeModules = rec {
+            stasis = default;
 
-        formatter = pkgs.nixfmt;
+            default =
+              { pkgs, ... }:
+              let
+                module = import ./nix/hm-module.nix {
+                  package = withSystem pkgs.stdenv.hostPlatform.system ({ config, ... }: config.packages.default);
+                };
+              in
+              {
+                imports = [ module ];
+              };
+          };
 
-        devShell = pkgs.mkShell {
-          name = "stasis-devshell";
-          buildInputs = [
-            pkgs.rustc
-            pkgs.cargo
-            pkgs.pkg-config
-            pkgs.git
-            pkgs.wayland
-            pkgs.wayland-protocols
-            pkgs.dbus
-          ];
-
-          RUSTFLAGS = "-C target-cpu=native";
-
-          shellHook = ''
-            echo "Entering stasis dev shell — run: cargo build, cargo run, or nix build .#stasis"
-          '';
+          overlays.default =
+            final: prev:
+            let
+              packages = withSystem prev.stdenv.hostPlatform.system ({ config, ... }: config.packages);
+            in
+            {
+              ${name} = packages.default;
+            };
         };
       }
     );
