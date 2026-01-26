@@ -53,8 +53,6 @@ fn default_laptop_config() -> String {
 #     `default.ac:` and `default.battery:`
 #   depending on current power source.
 
-active_profile null
-
 default:
   # Optional: run before suspending (e.g., ensure lock is up)
   #pre_suspend_command "swaylock"
@@ -149,8 +147,6 @@ fn default_desktop_config() -> String {
 
 @author "Dustin Pilgrim"
 @description "Lightweight feature packed idle manager for Wayland"
-
-active_profile null
 
 default:
   # Optional: run before suspending (e.g., ensure lock is up)
