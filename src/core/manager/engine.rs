@@ -38,38 +38,7 @@ impl Manager {
 
             Event::UserActivity { .. } => {
                 let was_paused = state.paused();
-
-                out.extend(self.resume_commands_for_activity(state, &cfg));
-
-                if state.is_locked() {
-                    self.advance_past_lock_if_needed(state, &cfg);
-
-                    let post_lock_start = self.first_enabled_step_after_lock(&cfg);
-                    state.restart_post_lock_segment(now_ms, post_lock_start);
-
-                    self.refresh_paused(state, now_ms);
-
-                    if cfg.notify_on_unpause && was_paused && !state.paused() {
-                        out.push(Action::Notify {
-                            message: "resumed".to_string(),
-                        });
-                    }
-
-                    return Ok(out);
-                }
-
-                state.reset_idle_cycle(now_ms);
-                self.refresh_paused(state, now_ms);
-
-                self.sync_step_index_after_startup_instants(state, &cfg);
-
-                if cfg.notify_on_unpause && was_paused && !state.paused() {
-                    out.push(Action::Notify {
-                        message: "resumed".to_string(),
-                    });
-                }
-
-                self.advance_past_lock_if_needed(state, &cfg);
+                self.handle_activity_like_event(state, &cfg, now_ms, was_paused, &mut out);
             }
 
             Event::ManualPause { .. } => {
@@ -86,30 +55,20 @@ impl Manager {
                 }
                 state.set_manually_paused(false);
 
-                out.extend(self.resume_commands_for_activity(state, &cfg));
-                state.reset_idle_cycle(now_ms);
-
-                self.refresh_paused(state, now_ms);
-                self.sync_step_index_after_startup_instants(state, &cfg);
-
-                self.advance_past_lock_if_needed(state, &cfg);
+                let was_paused = true;
+                self.handle_activity_like_event(state, &cfg, now_ms, was_paused, &mut out);
             }
 
             Event::PauseExpired { message, .. } => {
                 if state.manually_paused() {
                     state.set_manually_paused(false);
 
-                    out.extend(self.resume_commands_for_activity(state, &cfg));
-                    state.reset_idle_cycle(now_ms);
-
-                    self.refresh_paused(state, now_ms);
-                    self.sync_step_index_after_startup_instants(state, &cfg);
+                    let was_paused = true;
+                    self.handle_activity_like_event(state, &cfg, now_ms, was_paused, &mut out);
 
                     if cfg.notify_on_unpause {
                         out.push(Action::Notify { message });
                     }
-
-                    self.advance_past_lock_if_needed(state, &cfg);
                 }
             }
 
@@ -197,13 +156,8 @@ impl Manager {
                         state.arm_resume_episode();
                     }
 
-                    out.extend(self.resume_commands_for_activity(state, &cfg));
-                    state.reset_idle_cycle(now_ms);
-
-                    self.refresh_paused(state, now_ms);
-                    self.sync_step_index_after_startup_instants(state, &cfg);
-
-                    self.advance_past_lock_if_needed(state, &cfg);
+                    let was_paused = state.paused();
+                    self.handle_activity_like_event(state, &cfg, now_ms, was_paused, &mut out);
                 }
             }
 
@@ -326,22 +280,68 @@ impl Manager {
             }
 
             Event::MediaStateChanged { state: m, .. } => {
+                let was_paused = state.paused();
+
                 let old = self.last_media;
                 self.last_media = m;
 
-                self.refresh_paused(state, now_ms);
+                let media_ended = matches!(old, MediaState::PlayingLocal | MediaState::PlayingRemote)
+                    && matches!(m, MediaState::Idle);
 
-                if cfg.notify_on_unpause
-                    && matches!(old, MediaState::PlayingLocal | MediaState::PlayingRemote)
-                    && matches!(m, MediaState::Idle)
-                    && !state.paused()
-                {
-                    eventline::info!("media ended");
+                if media_ended {
+                    self.handle_activity_like_event(state, &cfg, now_ms, was_paused, &mut out);
+
+                    if cfg.notify_on_unpause && was_paused && !state.paused() {
+                        eventline::info!("media ended");
+                    }
+                } else {
+                    self.refresh_paused(state, now_ms);
                 }
             }
         }
 
         Ok(out)
+    }
+
+    fn handle_activity_like_event(
+        &mut self,
+        state: &mut State,
+        cfg: &Config,
+        now_ms: u64,
+        was_paused: bool,
+        out: &mut Vec<Action>,
+    ) {
+        out.extend(self.resume_commands_for_activity(state, cfg));
+
+        if state.is_locked() {
+            self.advance_past_lock_if_needed(state, cfg);
+
+            let post_lock_start = self.first_enabled_step_after_lock(cfg);
+            state.restart_post_lock_segment(now_ms, post_lock_start);
+
+            self.refresh_paused(state, now_ms);
+
+            if cfg.notify_on_unpause && was_paused && !state.paused() {
+                out.push(Action::Notify {
+                    message: "resumed".to_string(),
+                });
+            }
+
+            return;
+        }
+
+        state.reset_idle_cycle(now_ms);
+        self.refresh_paused(state, now_ms);
+
+        self.sync_step_index_after_startup_instants(state, cfg);
+
+        if cfg.notify_on_unpause && was_paused && !state.paused() {
+            out.push(Action::Notify {
+                message: "resumed".to_string(),
+            });
+        }
+
+        self.advance_past_lock_if_needed(state, cfg);
     }
 
     fn effective_cfg(&self, state: &State) -> Result<Config, Error> {
@@ -356,15 +356,12 @@ impl Manager {
         let was_paused = state.paused();
 
         if !was_paused && new_paused {
-            // entering pause
             state.set_pause_started_ms(Some(now_ms));
         } else if was_paused && !new_paused {
-            // leaving pause: freeze countdown by shifting base forward
             if let Some(t0) = state.take_pause_started_ms() {
                 let dt = now_ms.saturating_sub(t0);
                 state.set_step_base_ms(state.step_base_ms().saturating_add(dt));
 
-                // optional: also freeze the notify-wait window if you use it
                 if state.pre_action_notify_sent() {
                     state.set_pre_action_notify_ms(state.pre_action_notify_ms().saturating_add(dt));
                 }
@@ -793,3 +790,4 @@ impl Manager {
         out
     }
 }
+
