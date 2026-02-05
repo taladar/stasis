@@ -50,6 +50,7 @@ pub struct State {
 
     // Session / profile
     is_locked: bool,
+    // None means "default" (no profile overlay)
     active_profile: Option<String>,
 
     // Power/plan selection
@@ -104,7 +105,8 @@ impl State {
             debounce_pending: true, // boot behaves like "fresh idle cycle"
 
             is_locked: false,
-            active_profile: Some("default".to_string()),
+            // IMPORTANT: default is represented by None (profile selection is IPC-only).
+            active_profile: None,
 
             power_state: None,
             plan_source: PlanSource::Desktop,
@@ -270,7 +272,6 @@ impl State {
     }
 
     // ---------------- pause timestamp helpers ----------------
-
 
     /// Set/clear the pause-start timestamp.
     pub fn set_pause_started_ms(&mut self, v: Option<u64>) {

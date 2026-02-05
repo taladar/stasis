@@ -125,8 +125,7 @@ fn parse_config_file(rc: &RuneConfig) -> Result<ConfigFile, String> {
                 return Err("config must contain a `default:` block".into());
             }
 
-            // globals (top-level)
-            let active_profile = opt_string(rc, "active_profile")?;
+            // NOTE: profile selection is runtime-only (IPC). The config never selects a profile.
 
             // ---- parse default ----
             let mut cfg = Config::disabled();
@@ -137,7 +136,7 @@ fn parse_config_file(rc: &RuneConfig) -> Result<ConfigFile, String> {
             cfg.monitor_media = rc.get_or("default.monitor_media", false);
             cfg.ignore_remote_media = rc.get_or("default.ignore_remote_media", false);
 
-            // FIX: allow strings OR /regex/ entries (keep compiled regex)
+            // allow strings OR /regex/ entries (keep compiled regex)
             cfg.media_blacklist = get_vec_pattern(rc, "default.media_blacklist", Vec::new())?;
 
             cfg.debounce_seconds = rc.get_or("default.debounce_seconds", 0u64);
@@ -145,7 +144,7 @@ fn parse_config_file(rc: &RuneConfig) -> Result<ConfigFile, String> {
             cfg.notify_on_unpause = rc.get_or("default.notify_on_unpause", false);
             cfg.notify_before_action = rc.get_or("default.notify_before_action", false);
 
-            // FIX: allow strings OR /regex/ entries (keep compiled regex)
+            // allow strings OR /regex/ entries (keep compiled regex)
             cfg.inhibit_apps = get_vec_pattern(rc, "default.inhibit_apps", Vec::new())?;
 
             // legacy named blocks (optional)
@@ -177,11 +176,7 @@ fn parse_config_file(rc: &RuneConfig) -> Result<ConfigFile, String> {
             // ---- profiles ----
             let profiles = parse_profiles(rc)?;
 
-            let cfg_file = ConfigFile {
-                default: cfg,
-                profiles,
-                active_profile,
-            };
+            let cfg_file = ConfigFile { default: cfg, profiles, active_profile: None };
 
             log_config_debug(&cfg_file);
 
@@ -326,6 +321,8 @@ fn parse_profiles(rc: &RuneConfig) -> Result<Vec<Profile>, String> {
     let mut profiles: Vec<Profile> = Vec::new();
 
     for name in top {
+        // NOTE: `active_profile` is reserved so users can use it as a top-level variable
+        // without it being mis-parsed as a profile block.
         if name.is_empty() || name == "default" || name == "active_profile" {
             continue;
         }
@@ -360,7 +357,7 @@ fn parse_profiles(rc: &RuneConfig) -> Result<Vec<Profile>, String> {
         pc.monitor_media = opt_bool(rc, format!("{name}.monitor_media"))?;
         pc.ignore_remote_media = opt_bool(rc, format!("{name}.ignore_remote_media"))?;
 
-        // FIX: allow strings OR /regex/ entries (keep compiled regex)
+        // allow strings OR /regex/ entries (keep compiled regex)
         pc.media_blacklist = opt_vec_pattern(rc, &format!("{name}.media_blacklist"))?;
 
         pc.debounce_seconds = opt_u64(rc, format!("{name}.debounce_seconds"))?;
@@ -368,7 +365,7 @@ fn parse_profiles(rc: &RuneConfig) -> Result<Vec<Profile>, String> {
         pc.notify_on_unpause = opt_bool(rc, format!("{name}.notify_on_unpause"))?;
         pc.notify_before_action = opt_bool(rc, format!("{name}.notify_before_action"))?;
 
-        // FIX: allow strings OR /regex/ entries (keep compiled regex)
+        // allow strings OR /regex/ entries (keep compiled regex)
         pc.inhibit_apps = opt_vec_pattern(rc, &format!("{name}.inhibit_apps"))?;
 
         // plan overrides
@@ -416,7 +413,7 @@ fn parse_action_block(rc: &RuneConfig, base: &str) -> Result<ActionBlock, String
     let command = opt_string(rc, format!("{base}.command"))?;
     let resume_command = opt_string(rc, format!("{base}.resume_command"))?;
 
-    // NEW: allow notifications on ANY action block (custom, dpms, suspend, etc.)
+    // allow notifications on ANY action block (custom, dpms, suspend, etc.)
     let notification = opt_string(rc, format!("{base}.notification"))?;
     let notify_seconds_before = opt_u64(rc, format!("{base}.notify_seconds_before"))?;
 
@@ -553,7 +550,6 @@ fn log_config_debug(cfg_file: &ConfigFile) {
     let cfg = &cfg_file.default;
 
     eventline::debug!("Parsed config:");
-    eventline::debug!("  active_profile = {:?}", cfg_file.active_profile);
     eventline::debug!("  pre_suspend_command = {:?}", cfg.pre_suspend_command);
 
     eventline::debug!("  monitor_media = {:?}", cfg.monitor_media);

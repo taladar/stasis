@@ -208,14 +208,17 @@ impl Manager {
             Event::ProfileChanged { name, .. } => {
                 let raw = name.trim();
 
-                let candidate: Option<String> = if raw.eq_ignore_ascii_case("none") {
-                    None
-                } else if raw.is_empty() {
+                // IPC-only profile selection.
+                // "default" and "none" both mean: no profile overlay (use default block only).
+                let candidate: Option<String> = if raw.is_empty() {
                     return Err(Error::InvalidConfig(ConfigError::InvalidProfileName));
+                } else if raw.eq_ignore_ascii_case("none") || raw.eq_ignore_ascii_case("default") {
+                    None
                 } else {
                     Some(raw.to_string())
                 };
 
+                // Validate selection against loaded config.
                 if self
                     .cfg_file
                     .effective_for(candidate.as_deref(), state.plan_source())
@@ -790,4 +793,3 @@ impl Manager {
         out
     }
 }
-
