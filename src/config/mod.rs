@@ -315,23 +315,32 @@ fn parse_named_plan(rc: &RuneConfig, base: &str) -> Result<Vec<PlanStep>, String
 }
 
 /// Parse profiles (top-level blocks other than `default`).
+/// A name is considered a profile ONLY if it is an object/block (i.e. it has subkeys).
+/// If it's a scalar/array/etc, it is treated as a global and ignored here.
 fn parse_profiles(rc: &RuneConfig) -> Result<Vec<Profile>, String> {
     let top = rc.get_keys("").unwrap_or_default();
 
     let mut profiles: Vec<Profile> = Vec::new();
 
     for name in top {
-        // NOTE: `active_profile` is reserved so users can use it as a top-level variable
-        // without it being mis-parsed as a profile block.
-        if name.is_empty() || name == "default" || name == "active_profile" {
+        // Non-profile keys
+        if name.is_empty() || name == "default" {
             continue;
         }
         if name.starts_with('@') {
             continue; // metadata
         }
 
+        // If it doesn't exist at all, skip.
         if !rc.has(&name) {
             continue;
+        }
+
+        // Only treat as a profile if this top-level key is a block/object
+        // (i.e. it has subkeys). Scalars/globals will have no subkeys here.
+        let subkeys = rc.get_keys(&name).unwrap_or_default();
+        if subkeys.is_empty() {
+            continue; // global scalar/array/etc, not a profile block
         }
 
         let mode_s = opt_string(rc, format!("{name}.mode"))?
@@ -357,15 +366,10 @@ fn parse_profiles(rc: &RuneConfig) -> Result<Vec<Profile>, String> {
         pc.monitor_media = opt_bool(rc, format!("{name}.monitor_media"))?;
         pc.ignore_remote_media = opt_bool(rc, format!("{name}.ignore_remote_media"))?;
 
-        // allow strings OR /regex/ entries (keep compiled regex)
         pc.media_blacklist = opt_vec_pattern(rc, &format!("{name}.media_blacklist"))?;
-
         pc.debounce_seconds = opt_u64(rc, format!("{name}.debounce_seconds"))?;
-
         pc.notify_on_unpause = opt_bool(rc, format!("{name}.notify_on_unpause"))?;
         pc.notify_before_action = opt_bool(rc, format!("{name}.notify_before_action"))?;
-
-        // allow strings OR /regex/ entries (keep compiled regex)
         pc.inhibit_apps = opt_vec_pattern(rc, &format!("{name}.inhibit_apps"))?;
 
         // plan overrides
