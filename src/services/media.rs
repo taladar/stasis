@@ -380,6 +380,10 @@ fn parse_pactl_sink_inputs(text: &str, media_blacklist: &[Pattern]) -> MediaSnap
             return;
         }
 
+        if looks_like_system_audio(app_name, app_bin, node_name, media_name) {
+            return;
+        }
+
         // ---- FIRST: ignore obvious games (cheap heuristic) ----
         if looks_like_game(app_name, app_bin, node_name) {
             return;
@@ -554,6 +558,28 @@ fn is_remote_stream(
     ];
 
     NEEDLES.iter().any(|n| hay.contains(n))
+}
+
+fn looks_like_system_audio(app_name: &str, app_bin: &str, node_name: &str, media_name: &str) -> bool {
+    let app_lc = app_name.to_lowercase();
+    let bin_lc = app_bin.to_lowercase();
+    let node_lc = node_name.to_lowercase();
+    let media_lc = media_name.to_lowercase();
+
+    if app_lc.starts_with("speech-dispatcher-")
+        || node_lc.starts_with("speech-dispatcher-")
+        || bin_lc == "sd_generic"
+        || bin_lc == "sd_dummy"
+        || bin_lc.starts_with("sd_")
+    {
+        return true;
+    }
+
+    if app_lc == "speech-dispatcher" && media_lc == "playback" {
+        return true;
+    }
+
+    false
 }
 
 // Cheap “game” heuristic: conservative. You can tune these as you observe misses/false positives.
