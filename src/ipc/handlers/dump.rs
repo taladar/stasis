@@ -94,10 +94,14 @@ Examples:
 }
 
 fn log_path() -> Option<PathBuf> {
-    let home = std::env::var_os("HOME")?;
-    let mut p = PathBuf::from(home);
-    p.push(".cache");
-    p.push("stasis");
-    p.push("stasis.log");
-    Some(p)
+    // Prefer XDG_STATE_HOME per spec
+    let base = if let Some(state) = std::env::var_os("XDG_STATE_HOME") {
+        PathBuf::from(state)
+    } else {
+        let home = std::env::var_os("HOME")?;
+        PathBuf::from(home).join(".local").join("state")
+    };
+
+    Some(base.join("stasis").join("stasis.log"))
 }
+

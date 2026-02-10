@@ -1,0 +1,197 @@
+.TH STASIS 1 "February 2026" "stasis" "User Commands"
+.SH NAME
+stasis \- idle manager with ordered, per-step timers and profile overlays
+.SH SYNOPSIS
+.B stasis
+.RI [ options ] " [command]"
+.SH DESCRIPTION
+.B stasis
+is a user-session idle manager that runs an ordered plan of actions (steps)
+after periods of inactivity.
+
+Steps are evaluated strictly in file order and use per-step sequential timers:
+each step's timeout counts from the moment the previous enabled step fires
+(not from last user activity).
+
+Stasis supports:
+.IP \(bu 2
+A debounce window before step timeouts (optional).
+.IP \(bu 2
+Per-step notifications before a step fires (optional).
+.IP \(bu 2
+Lock-aware behavior: if already locked, Stasis advances past the lock step.
+.IP \(bu 2
+Plan sources for desktops and laptops (AC vs battery).
+.IP \(bu 2
+Profiles that overlay or replace configuration.
+.IP \(bu 2
+Manual pause/resume and inhibition controls.
+
+.SH OPTIONS
+.TP
+.BR \-c ", " \-\-config " " \fIFILE\fR
+Use \fIFILE\fR as the configuration file.
+.TP
+.BR \-v ", " \-\-verbose
+Enable verbose logging.
+.TP
+.B \-\-no-console
+Disable console logging/output.
+.TP
+.B \-\-timestamps
+Include timestamps in console output.
+
+.SH COMMANDS
+If no command is provided, \fBstasis\fR runs the idle manager.
+
+.TP
+.B reload
+Reload the configuration without restarting Stasis.
+
+.TP
+.BR pause " " [\fIfor\fR " " \fIDURATION\fR] | [\fIuntil\fR " " \fITIME\fR]
+Pause idle timers.
+
+With no arguments, pauses indefinitely until \fBstasis resume\fR.
+
+With \fBfor\fR, schedules an automatic resume after a duration.
+
+With \fBuntil\fR, schedules an automatic resume at the next occurrence of a local time.
+
+Duration format:
+.IP \(bu 2
+A sequence of \fB<number><unit>\fR parts, e.g. \fB1h30m\fR, \fB5m\fR, \fB10s\fR, \fB250ms\fR, \fB1d2h3m4s\fR.
+.IP \(bu 2
+Units: \fBms\fR, \fBs\fR, \fBm\fR, \fBh\fR, \fBd\fR.
+
+Time format (\fBuntil\fR):
+.IP \(bu 2
+24-hour: \fB13:30\fR, \fB0:05\fR.
+.IP \(bu 2
+12-hour with am/pm: \fB1:30pm\fR, \fB1:30 pm\fR, \fB1pm\fR, \fB1 pm\fR.
+
+Notes:
+.IP \(bu 2
+\fBstasis pause\fR always pauses immediately first; \fBfor/until\fR only adds an auto-resume.
+.IP \(bu 2
+New pause/resume requests invalidate older scheduled auto-resumes.
+
+.TP
+.B resume
+Resume idle timers after a manual pause.
+Any pending scheduled auto-resume is invalidated.
+
+.TP
+.BR list " " actions | profiles
+List information from the running daemon.
+
+\fBactions\fR shows the currently effective plan (active profile + power source).
+
+\fBprofiles\fR shows all configured profile names you can switch to.
+
+If no argument is provided, or \fBhelp\fR/\fB-h\fR/\fB--help\fR is used, prints usage.
+
+.TP
+.BR trigger " " \fISTEP\fR
+Manually trigger an idle step by name.
+
+Normalization is case-insensitive:
+spaces and tabs are removed and underscores become dashes.
+
+Aliases:
+.IP \(bu 2
+\fBlock\fR and \fBlockscreen\fR map to \fBlock-screen\fR.
+
+Special value:
+.IP \(bu 2
+\fBall\fR triggers all enabled, non-instant steps in the effective plan, skipping the lock step if already locked.
+
+Custom steps can be triggered by their name (normalized) and also by
+\fBcustom:\fR or \fBcustom-\fR prefixes.
+
+.TP
+.B toggle-inhibit
+Toggle manual idle inhibition. When inhibited, timers are paused.
+
+.TP
+.B stop
+Stop all running Stasis instances.
+
+.TP
+.BR info " " [\-\-json]
+Display current session information.
+With \fB--json\fR, output machine-readable JSON.
+
+.TP
+.BR dump " " [\fIN\fR]
+Print the last \fIN\fR lines of the Stasis log (default: 100, max: 2000).
+
+.TP
+.BR profile " " \fINAME\fR | none
+Switch the active profile used for config selection.
+Only a single token is accepted.
+
+\fBnone\fR clears the active profile overlay (uses base config only).
+
+If no argument is provided, or \fBhelp\fR/\fB-h\fR/\fB--help\fR is used, prints usage.
+
+.SH FILES
+.TP
+.I ~/.local/state/stasis/stasis.log
+Default log file location.
+.TP
+.I ~/.config/stasis/stasis.rune
+Typical configuration location (packaging may choose another default).
+
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.TP
+.B 2
+Command-line usage error.
+
+.SH EXAMPLES
+.TP
+Run with a specific config:
+.B stasis --config ~/.config/stasis/stasis.rune
+.TP
+List effective actions:
+.B stasis list actions
+.TP
+List profiles:
+.B stasis list profiles
+.TP
+Switch profile:
+.B stasis profile work
+.TP
+Clear profile overlay:
+.B stasis profile none
+.TP
+Pause indefinitely:
+.B stasis pause
+.TP
+Pause for 1 hour 30 minutes:
+.B stasis pause for 1h30m
+.TP
+Pause until 1:30pm local time:
+.B stasis pause until 1:30pm
+.TP
+Resume:
+.B stasis resume
+.TP
+Trigger lock step:
+.B stasis trigger lock-screen
+.TP
+Dump last 200 log lines:
+.B stasis dump 200
+
+.SH SEE ALSO
+.BR stasis (5),
+.BR loginctl (1),
+.BR systemctl (1)
+
+.SH AUTHOR
+Dustin Pilgrim
+.SH LICENSE
+MIT
