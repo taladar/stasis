@@ -17,7 +17,8 @@ opt-level = 2
 [dependencies]
 chrono = "0.4.43"
 clap = { version = "4.5.54", features = ["derive"] }
-eventline = "0.5.1"
+dirs = "6.0.0"
+eventline = "0.6.1"
 futures = "0.3.31"
 libc = "0.2.180"
 regex = "1.12.2"

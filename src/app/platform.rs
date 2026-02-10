@@ -7,9 +7,12 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 pub fn default_log_path() -> Option<PathBuf> {
-    let home = std::env::var_os("HOME")?;
-    Some(PathBuf::from(home).join(".cache").join("stasis").join("stasis.log"))
+    let state_base = dirs::state_dir()
+        .or_else(|| dirs::home_dir().map(|h| h.join(".local/state")))?;
+
+    Some(state_base.join("stasis").join("stasis.log"))
 }
+
 
 // ---------------- single-instance lock ----------------
 
