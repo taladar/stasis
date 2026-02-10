@@ -169,18 +169,11 @@ impl Manager {
             Event::ResumedFromSleep { .. } => {
                 state.set_system_paused(false);
 
-                out.extend(self.resume_commands_for_activity(state, &cfg));
+                let was_paused = state.paused();
+                self.handle_activity_like_event(state, &cfg, now_ms, was_paused, &mut out);
 
-                if state.is_locked() {
-                    self.advance_past_lock_if_needed(state, &cfg);
-                    let post_lock_start = self.first_enabled_step_after_lock(&cfg);
-                    state.restart_post_lock_segment(now_ms, post_lock_start);
-                } else {
-                    state.reset_idle_cycle(now_ms);
-                    self.sync_step_index_after_startup_instants(state, &cfg);
-                }
-
-                self.refresh_paused(state, now_ms);
+                state.set_pre_action_notify_sent(false);
+                state.set_debounce_pending(false);
             }
 
             Event::LidClosed { .. } => {
@@ -191,18 +184,11 @@ impl Manager {
             Event::LidOpened { .. } => {
                 state.set_system_paused(false);
 
-                out.extend(self.resume_commands_for_activity(state, &cfg));
+                let was_paused = state.paused();
+                self.handle_activity_like_event(state, &cfg, now_ms, was_paused, &mut out);
 
-                if state.is_locked() {
-                    self.advance_past_lock_if_needed(state, &cfg);
-                    let post_lock_start = self.first_enabled_step_after_lock(&cfg);
-                    state.restart_post_lock_segment(now_ms, post_lock_start);
-                } else {
-                    state.reset_idle_cycle(now_ms);
-                    self.sync_step_index_after_startup_instants(state, &cfg);
-                }
-
-                self.refresh_paused(state, now_ms);
+                state.set_pre_action_notify_sent(false);
+                state.set_debounce_pending(false);
             }
 
             Event::ProfileChanged { name, .. } => {
