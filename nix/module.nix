@@ -26,9 +26,9 @@ let
   # `path` entries get their /bin added automatically for store paths.
   # For string paths, systemd uses them directly (expects .../bin layout).
   defaultServicePath = [
-    "/run/current-system/sw"
-    "/etc/profiles/per-user/%u"
-    "/nix/var/nix/profiles/default"
+    "/run/current-system/sw/bin"
+    "/etc/profiles/per-user/%u/bin"
+    "/nix/var/nix/profiles/default/bin"
     pkgs.bash
     pkgs.coreutils
     pkgs.systemd

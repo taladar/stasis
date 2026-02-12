@@ -17,9 +17,9 @@ let
   cfg = config.services.stasis;
 
   defaultServicePath = [
-    "/run/current-system/sw"
-    "/etc/profiles/per-user/%u"
-    "/nix/var/nix/profiles/default"
+    "/run/current-system/sw/bin"
+    "/etc/profiles/per-user/%u/bin"
+    "/nix/var/nix/profiles/default/bin"
     pkgs.bash
     pkgs.coreutils
     pkgs.systemd
