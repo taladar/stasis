@@ -37,8 +37,7 @@ impl Manager {
             }
 
             Event::UserActivity { .. } => {
-                let was_paused = state.paused();
-                self.handle_activity_like_event(state, &cfg, now_ms, was_paused, &mut out);
+                self.handle_activity_like_event(state, &cfg, now_ms, &mut out);
             }
 
             Event::ManualPause { .. } => {
@@ -55,16 +54,16 @@ impl Manager {
                 }
                 state.set_manually_paused(false);
 
-                let was_paused = true;
-                self.handle_activity_like_event(state, &cfg, now_ms, was_paused, &mut out);
+                self.handle_activity_like_event(state, &cfg, now_ms, &mut out);
             }
 
+            // IMPORTANT: notify_on_unpause should ONLY fire for auto-resume from
+            // `stasis pause for/until` when the pause expires internally.
             Event::PauseExpired { message, .. } => {
                 if state.manually_paused() {
                     state.set_manually_paused(false);
 
-                    let was_paused = true;
-                    self.handle_activity_like_event(state, &cfg, now_ms, was_paused, &mut out);
+                    self.handle_activity_like_event(state, &cfg, now_ms, &mut out);
 
                     if cfg.notify_on_unpause {
                         out.push(Action::Notify { message });
@@ -156,8 +155,7 @@ impl Manager {
                         state.arm_resume_episode();
                     }
 
-                    let was_paused = state.paused();
-                    self.handle_activity_like_event(state, &cfg, now_ms, was_paused, &mut out);
+                    self.handle_activity_like_event(state, &cfg, now_ms, &mut out);
                 }
             }
 
@@ -169,8 +167,7 @@ impl Manager {
             Event::ResumedFromSleep { .. } => {
                 state.set_system_paused(false);
 
-                let was_paused = state.paused();
-                self.handle_activity_like_event(state, &cfg, now_ms, was_paused, &mut out);
+                self.handle_activity_like_event(state, &cfg, now_ms, &mut out);
 
                 state.set_pre_action_notify_sent(false);
                 state.set_debounce_pending(false);
@@ -184,8 +181,7 @@ impl Manager {
             Event::LidOpened { .. } => {
                 state.set_system_paused(false);
 
-                let was_paused = state.paused();
-                self.handle_activity_like_event(state, &cfg, now_ms, was_paused, &mut out);
+                self.handle_activity_like_event(state, &cfg, now_ms, &mut out);
 
                 state.set_pre_action_notify_sent(false);
                 state.set_debounce_pending(false);
@@ -278,9 +274,11 @@ impl Manager {
                     && matches!(m, MediaState::Idle);
 
                 if media_ended {
-                    self.handle_activity_like_event(state, &cfg, now_ms, was_paused, &mut out);
+                    self.handle_activity_like_event(state, &cfg, now_ms, &mut out);
 
-                    if cfg.notify_on_unpause && was_paused && !state.paused() {
+                    // Keep the log, but do not notify here.
+                    // notify_on_unpause is reserved for PauseExpired auto-resume only.
+                    if was_paused && !state.paused() {
                         eventline::info!("media ended");
                     }
                 } else {
@@ -297,7 +295,6 @@ impl Manager {
         state: &mut State,
         cfg: &Config,
         now_ms: u64,
-        was_paused: bool,
         out: &mut Vec<Action>,
     ) {
         out.extend(self.resume_commands_for_activity(state, cfg));
@@ -310,12 +307,6 @@ impl Manager {
 
             self.refresh_paused(state, now_ms);
 
-            if cfg.notify_on_unpause && was_paused && !state.paused() {
-                out.push(Action::Notify {
-                    message: "resumed".to_string(),
-                });
-            }
-
             return;
         }
 
@@ -323,12 +314,6 @@ impl Manager {
         self.refresh_paused(state, now_ms);
 
         self.sync_step_index_after_startup_instants(state, cfg);
-
-        if cfg.notify_on_unpause && was_paused && !state.paused() {
-            out.push(Action::Notify {
-                message: "resumed".to_string(),
-            });
-        }
 
         self.advance_past_lock_if_needed(state, cfg);
     }
@@ -658,7 +643,7 @@ impl Manager {
     }
 
     fn actions_for_plan_step(&self, state: &State, step: &PlanStep, cfg: &Config) -> Vec<Action> {
-        match &step.kind {            
+        match &step.kind {
             PlanStepKind::LockScreen => {
                 if state.is_locked() {
                     return Vec::new();
