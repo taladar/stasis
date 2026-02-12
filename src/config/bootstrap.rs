@@ -54,8 +54,9 @@ fn default_laptop_config() -> String {
 #   depending on current power source.
 
 default:
-  # Optional: enable loginctl integration (login1 is source of truth for lock/unlock)
-  #enable_loginctl true
+  # Optional: listen for loginctl lock/unlock-session signals (default false)
+  # NOTE: only sets internal state PAST/BEFORE lock state if received,
+  # it does not actually run your lock command.
 
   # Optional: run before suspending (e.g., ensure lock is up)
   #pre_suspend_command "swaylock"
@@ -149,7 +150,9 @@ fn default_desktop_config() -> String {
 @description "Lightweight feature packed idle manager for Wayland"
 
 default:
-  # Optional: enable loginctl integration (login1 is source of truth for lock/unlock)
+  # Optional: listen for loginctl lock/unlock-session signals (default false)
+  # NOTE: only sets internal state PAST/BEFORE lock state if received,
+  # it does not actually run your lock command.
   #enable_loginctl true
 
   # Optional: run before suspending (e.g., ensure lock is up)
