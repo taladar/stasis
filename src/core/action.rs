@@ -18,9 +18,6 @@ pub enum Action {
         message: String,
     },
 
-    /// Request lock via loginctl/login1 (optional integration).
-    LockSession,
-
     /// Lock-screen action: run the locker command and (optionally) also lock-session.
     ///
     /// The daemon should run `command` BLOCKING and only consider the lock "ended"

@@ -664,21 +664,10 @@ impl Manager {
                     return Vec::new();
                 }
 
-                let mut out = Vec::new();
-
-                // If requested, lock the session via login1 regardless of whether a command exists.
-                if cfg.enable_loginctl {
-                    out.push(Action::LockSession);
-                }
-
-                // Then run the UI locker command (may block or daemonize; see executor note below).
-                if let Some(cmd) = step.command.clone() {
-                    out.push(Action::RunLockScreen {
-                        command: cmd,
-                    });
-                }
-
-                out
+                step.command
+                    .clone()
+                    .map(|cmd| vec![Action::RunLockScreen { command: cmd }])
+                    .unwrap_or_default()
             }
 
             PlanStepKind::Suspend => {

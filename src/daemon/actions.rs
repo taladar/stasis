@@ -18,9 +18,7 @@ impl Daemon {
     ) -> Result<(), AnyError> {
         match action {
             Action::RunLockScreen { command } => {
-                // Global policy now; no per-step flag.
-                let enable_loginctl = self.enable_loginctl;
-                Self::spawn_lock_screen(tx, command, enable_loginctl);
+                Self::spawn_lock_screen(tx, command);
             }
 
             Action::RunCommand { command } => {
@@ -46,12 +44,6 @@ impl Daemon {
                     .spawn();
             }
 
-            Action::LockSession => {
-                eventline::info!("lock-session: loginctl lock-session");
-                crate::core::utils::run_shell_command_silent("loginctl lock-session")
-                    .map_err(into_any_error)?;
-            }
-
             Action::Suspend => {
                 eventline::info!("suspend requested");
             }
@@ -63,25 +55,9 @@ impl Daemon {
         Ok(())
     }
 
-    fn spawn_lock_screen(tx: mpsc::Sender<ManagerMsg>, command: String, enable_loginctl: bool) {
+    fn spawn_lock_screen(tx: mpsc::Sender<ManagerMsg>, command: String) {
         tokio::spawn(async move {
-            if enable_loginctl {
-                // In loginctl mode, login1 is the source of truth for lock/unlock.
-                // Do NOT emit SessionLocked/Unlocked based on process lifetime.
-
-                // Fire-and-forget the UI locker. It may block OR daemonize; we don't care here.
-                eventline::info!("lock: {} (spawn, loginctl-tracked)", command);
-                let _ = Command::new("sh")
-                    .arg("-lc")
-                    .arg(command)
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .spawn();
-
-                return;
-            }
-
-            // Process-tracked mode: command lifetime defines lock episode.
+            // Process-tracked mode is ALWAYS the source of truth.
             let _ = tx
                 .send(ManagerMsg::Event(Event::SessionLocked {
                     now_ms: crate::core::utils::now_ms(),
