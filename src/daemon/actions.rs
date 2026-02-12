@@ -63,16 +63,31 @@ impl Daemon {
 
     fn spawn_lock_screen(tx: mpsc::Sender<ManagerMsg>, command: String, use_loginctl: bool) {
         tokio::spawn(async move {
+            if use_loginctl {
+                // In loginctl mode, login1 is the source of truth for lock/unlock.
+                // Do NOT emit SessionLocked/Unlocked based on process lifetime.
+
+                eventline::info!("lock-session: loginctl lock-session");
+                let _ = crate::core::utils::run_shell_command_silent("loginctl lock-session");
+
+                // Fire-and-forget the UI locker. It may block OR daemonize; we don't care here.
+                eventline::info!("lock: {} (spawn, loginctl-tracked)", command);
+                let _ = Command::new("sh")
+                    .arg("-lc")
+                    .arg(command)
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn();
+
+                return;
+            }
+
+            // Process-tracked mode: command lifetime defines lock episode.
             let _ = tx
                 .send(ManagerMsg::Event(Event::SessionLocked {
                     now_ms: crate::core::utils::now_ms(),
                 }))
                 .await;
-
-            if use_loginctl {
-                eventline::info!("lock-session: loginctl lock-session");
-                let _ = crate::core::utils::run_shell_command_silent("loginctl lock-session");
-            }
 
             eventline::info!("lock: {} (await exit)", command);
 

@@ -658,24 +658,28 @@ impl Manager {
     }
 
     fn actions_for_plan_step(&self, state: &State, step: &PlanStep, cfg: &Config) -> Vec<Action> {
-        match &step.kind {
+        match &step.kind {            
             PlanStepKind::LockScreen => {
                 if state.is_locked() {
                     return Vec::new();
                 }
 
+                let mut out = Vec::new();
+
+                // If requested, lock the session via login1 regardless of whether a command exists.
+                if step.use_loginctl {
+                    out.push(Action::LockSession);
+                }
+
+                // Then run the UI locker command (may block or daemonize; see executor note below).
                 if let Some(cmd) = step.command.clone() {
-                    return vec![Action::RunLockScreen {
+                    out.push(Action::RunLockScreen {
                         command: cmd,
                         use_loginctl: step.use_loginctl,
-                    }];
+                    });
                 }
 
-                if step.use_loginctl {
-                    return vec![Action::LockSession];
-                }
-
-                Vec::new()
+                out
             }
 
             PlanStepKind::Suspend => {
