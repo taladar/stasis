@@ -667,7 +667,7 @@ impl Manager {
                 let mut out = Vec::new();
 
                 // If requested, lock the session via login1 regardless of whether a command exists.
-                if step.use_loginctl {
+                if cfg.enable_loginctl {
                     out.push(Action::LockSession);
                 }
 
@@ -675,7 +675,6 @@ impl Manager {
                 if let Some(cmd) = step.command.clone() {
                     out.push(Action::RunLockScreen {
                         command: cmd,
-                        use_loginctl: step.use_loginctl,
                     });
                 }
 

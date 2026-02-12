@@ -27,7 +27,6 @@ pub enum Action {
     /// once the process exits.
     RunLockScreen {
         command: String,
-        use_loginctl: bool,
     },
 
     /// Request system suspend (runtime decides command/system call).

@@ -17,6 +17,7 @@
 # --------------------------------------------------------------------
 default:
   # ----- Global knobs (these DO get overridden by profiles) -----
+  enable_loginctl false
   pre_suspend_command None
   monitor_media true
   ignore_remote_media true
@@ -53,11 +54,9 @@ default:
   end
 
   # Lock step:
-  # - if `use_loginctl true`, Stasis calls `loginctl lock-session`
   # - then runs the lock command (blocking) so unlock is detected reliably
   lock_screen:
     timeout 300
-    use_loginctl true
     command "hyprlock"
     resume_command "notify-send 'Welcome Back $env.USER!'"
     notification "Locking session in 10s"
@@ -102,7 +101,6 @@ default:
 
     lock_screen:
       timeout 120
-      use_loginctl true
       command "hyprlock"
       notification "Locking on AC in 10s"
       notify_seconds_before 10
@@ -133,7 +131,6 @@ default:
 
     lock_screen:
       timeout 120
-      use_loginctl true
       command "hyprlock"
       resume_command "notify-send 'Welcome back $env.USER!'"
     end
@@ -174,6 +171,7 @@ work:
   mode "overlay"
 
   # Override globals (example: longer debounce, keep media monitoring)
+  enable_loginctl true
   debounce_seconds 10
   monitor_media true
   ignore_remote_media true
@@ -181,7 +179,6 @@ work:
   # Override specific steps (everything not mentioned is inherited)
   lock_screen:
     timeout 600
-    use_loginctl true
     command "hyprlock"
     resume_command "notify-send 'Welcome back, $env.USER!'"
   end

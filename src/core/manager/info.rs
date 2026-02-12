@@ -172,8 +172,8 @@ fn render_plan(cfg: &Config, state: &State) -> String {
     }
 
     // Build enabled rows first so we can compute widths for alignment.
-    // (idx, name, timeout_seconds, notify_before_opt, has_cmd, loginctl_only)
-    let mut rows: Vec<(usize, String, u64, Option<u64>, bool, bool)> = Vec::new();
+    // (idx, name, timeout_seconds, notify_before_opt, has_cmd)
+    let mut rows: Vec<(usize, String, u64, Option<u64>, bool)> = Vec::new();
 
     for (i, step) in cfg.plan.iter().enumerate() {
         if !step_enabled(cfg, i) {
@@ -192,10 +192,8 @@ fn render_plan(cfg: &Config, state: &State) -> String {
         };
 
         let has_cmd = step.command.is_some();
-        let loginctl_only =
-            !has_cmd && matches!(step.kind, PlanStepKind::LockScreen) && step.use_loginctl;
 
-        rows.push((i, name, step.timeout_seconds, notify_before, has_cmd, loginctl_only));
+        rows.push((i, name, step.timeout_seconds, notify_before, has_cmd));
     }
 
     if rows.is_empty() {
@@ -206,19 +204,19 @@ fn render_plan(cfg: &Config, state: &State) -> String {
     // Column widths
     let name_w = rows
         .iter()
-        .map(|(_, n, _, _, _, _)| n.len())
+        .map(|(_, n, _, _, _)| n.len())
         .max()
         .unwrap_or(0)
         .max(8);
 
     let secs_w = rows
         .iter()
-        .map(|(_, _, s, _, _, _)| s.to_string().len())
+        .map(|(_, _, s, _, _)| s.to_string().len())
         .max()
         .unwrap_or(1)
         .max(1);
 
-    for (i, name, timeout_seconds, notify_before, has_cmd, loginctl_only) in rows {
+    for (i, name, timeout_seconds, notify_before, has_cmd) in rows {
         let marker = if i == cur { "→" } else { " " };
 
         out.push_str(&format!(
@@ -236,8 +234,6 @@ fn render_plan(cfg: &Config, state: &State) -> String {
 
         if has_cmd {
             out.push_str("  cmd");
-        } else if loginctl_only {
-            out.push_str("  loginctl");
         }
 
         out.push('\n');
@@ -258,8 +254,8 @@ fn step_enabled(cfg: &Config, idx: usize) -> bool {
     if idx >= cfg.plan.len() {
         return false;
     }
-    let step = &cfg.plan[idx];
-    step.command.is_some() || (matches!(step.kind, PlanStepKind::LockScreen) && step.use_loginctl)
+
+    cfg.plan[idx].enabled()
 }
 
 fn next_step_line(cfg: &Config, state: &State, now_ms: u64) -> Option<String> {

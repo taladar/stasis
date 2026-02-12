@@ -99,7 +99,7 @@ impl Daemon {
         let ignore_remote_media = effective.ignore_remote_media;
         let media_blacklist = effective.media_blacklist.clone();
 
-        let enable_loginctl = effective.plan.iter().any(|s| s.is_lock() && s.use_loginctl);
+        let enable_loginctl = effective.enable_loginctl;
 
         eventline::debug!(
             "daemon: chassis={:?}, plan_src={:?}, active_profile={:?}, monitor_media={}, ignore_remote_media={}, media_blacklist_len={}, inhibit_apps_len={}, enable_loginctl={}, config_path={}",

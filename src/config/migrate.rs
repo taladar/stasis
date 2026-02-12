@@ -18,8 +18,38 @@ pub fn looks_like_old_config(text: &str) -> bool {
     has_stasis && !has_default
 }
 
+fn looks_like_new_with_use_loginctl(text: &str) -> bool {
+    let has_default = text.lines().any(|l| l.trim_start().starts_with("default:"));
+    let has_use = text
+        .lines()
+        .any(|l| l.trim_start().starts_with("use_loginctl "));
+    has_default && has_use
+}
+
 pub fn migrate_in_place(path: &Path) -> Result<MigrateOutcome, String> {
     let text = fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
+
+    // New-format configs that still have per-step `use_loginctl`: hoist to default.enable_loginctl.
+    if looks_like_new_with_use_loginctl(&text) {
+        let new_text = migrate_new_use_loginctl(&text);
+
+        let backup_path = backup_name(path);
+        let _ = fs::remove_file(&backup_path);
+
+        fs::rename(path, &backup_path).map_err(|e| {
+            format!(
+                "backup rename {} -> {}: {e}",
+                path.display(),
+                backup_path.display()
+            )
+        })?;
+
+        fs::write(path, new_text).map_err(|e| format!("write new {}: {e}", path.display()))?;
+
+        return Ok(MigrateOutcome::Migrated { backup_path });
+    }
+
+    // Old-format migration.
     if !looks_like_old_config(&text) {
         return Ok(MigrateOutcome::NotOldFormat);
     }
@@ -50,12 +80,69 @@ fn backup_name(path: &Path) -> PathBuf {
     PathBuf::from(format!("{}.bak", path.display()))
 }
 
+/* ---------------- new-with-use_loginctl rewrite ---------------- */
+
+fn migrate_new_use_loginctl(text: &str) -> String {
+    // Drop all `use_loginctl ...` lines, remember if any were true.
+    let mut saw_true = false;
+    let mut out_lines: Vec<String> = Vec::new();
+
+    for line in text.lines() {
+        let t = line.trim_start();
+        if t.starts_with("use_loginctl ") {
+            if t.split_whitespace()
+                .nth(1)
+                .is_some_and(|v| v.eq_ignore_ascii_case("true"))
+            {
+                saw_true = true;
+            }
+            continue; // drop it
+        }
+
+        out_lines.push(line.to_string());
+    }
+
+    // If nothing was true, we only removed noise.
+    if !saw_true {
+        return ensure_trailing_newline(out_lines.join("\n"));
+    }
+
+    // If enable_loginctl already exists anywhere, don't insert another.
+    let has_enable = out_lines
+        .iter()
+        .any(|l| l.trim_start().starts_with("enable_loginctl "));
+    if has_enable {
+        return ensure_trailing_newline(out_lines.join("\n"));
+    }
+
+    // Insert under `default:`
+    let mut rewritten: Vec<String> = Vec::new();
+    let mut inserted = false;
+
+    for l in out_lines {
+        rewritten.push(l.clone());
+        if !inserted && l.trim_start() == "default:" {
+            rewritten.push("  enable_loginctl true".to_string());
+            inserted = true;
+        }
+    }
+
+    ensure_trailing_newline(rewritten.join("\n"))
+}
+
+fn ensure_trailing_newline(mut s: String) -> String {
+    if !s.ends_with('\n') {
+        s.push('\n');
+    }
+    s
+}
+
 /* ---------------- old model ---------------- */
 
 #[derive(Debug, Default, Clone)]
 struct OldFile {
     meta_lines: Vec<String>, // @author, @description, etc.
-    globals: Vec<Line>,       // top-level things (rare)
+    globals: Vec<Line>,      // top-level things (rare)
     stasis: OldStasis,
     profiles: Vec<OldProfile>,
 }
@@ -100,12 +187,12 @@ fn parse_old(text: &str) -> Result<OldFile, String> {
         let line = original.trim();
         if line.is_empty() || line.starts_with('#') {
             // Keep metadata-ish comments only if they are @ lines; others are dropped in v1
-            if line.starts_with("@") {
+            if line.starts_with('@') {
                 f.meta_lines.push(original.to_string());
             }
             continue;
         }
-        if line.starts_with("@") {
+        if line.starts_with('@') {
             f.meta_lines.push(original.to_string());
             continue;
         }
@@ -136,21 +223,27 @@ fn parse_old(text: &str) -> Result<OldFile, String> {
                         name: block_name.to_string(),
                         ..Default::default()
                     });
-                    ctx.push(Ctx::Block { where_: BlockWhere::StasisDesktop });
+                    ctx.push(Ctx::Block {
+                        where_: BlockWhere::StasisDesktop,
+                    });
                 }
                 (Some(Ctx::OnAc), block_name) => {
                     f.stasis.on_ac.push(OldBlock {
                         name: block_name.to_string(),
                         ..Default::default()
                     });
-                    ctx.push(Ctx::Block { where_: BlockWhere::StasisAc });
+                    ctx.push(Ctx::Block {
+                        where_: BlockWhere::StasisAc,
+                    });
                 }
                 (Some(Ctx::OnBattery), block_name) => {
                     f.stasis.on_battery.push(OldBlock {
                         name: block_name.to_string(),
                         ..Default::default()
                     });
-                    ctx.push(Ctx::Block { where_: BlockWhere::StasisBattery });
+                    ctx.push(Ctx::Block {
+                        where_: BlockWhere::StasisBattery,
+                    });
                 }
                 (Some(Ctx::Profile), block_name) => {
                     let p = f.profiles.last_mut().ok_or("profile context missing")?;
@@ -158,7 +251,9 @@ fn parse_old(text: &str) -> Result<OldFile, String> {
                         name: block_name.to_string(),
                         ..Default::default()
                     });
-                    ctx.push(Ctx::Block { where_: BlockWhere::Profile });
+                    ctx.push(Ctx::Block {
+                        where_: BlockWhere::Profile,
+                    });
                 }
                 _ => {
                     // unknown nesting; ignore
@@ -180,27 +275,25 @@ fn parse_old(text: &str) -> Result<OldFile, String> {
             }
             Some(Ctx::OnAc) => f.stasis.globals.push(Line { key: k, raw_value: v }), // ignore
             Some(Ctx::OnBattery) => f.stasis.globals.push(Line { key: k, raw_value: v }), // ignore
-            Some(Ctx::Block { where_ }) => {
-                match where_ {
-                    BlockWhere::StasisDesktop => {
-                        let b = f.stasis.blocks.last_mut().ok_or("block missing")?;
-                        b.lines.push(Line { key: k, raw_value: v });
-                    }
-                    BlockWhere::StasisAc => {
-                        let b = f.stasis.on_ac.last_mut().ok_or("block missing")?;
-                        b.lines.push(Line { key: k, raw_value: v });
-                    }
-                    BlockWhere::StasisBattery => {
-                        let b = f.stasis.on_battery.last_mut().ok_or("block missing")?;
-                        b.lines.push(Line { key: k, raw_value: v });
-                    }
-                    BlockWhere::Profile => {
-                        let p = f.profiles.last_mut().ok_or("profile missing")?;
-                        let b = p.blocks.last_mut().ok_or("profile block missing")?;
-                        b.lines.push(Line { key: k, raw_value: v });
-                    }
+            Some(Ctx::Block { where_ }) => match where_ {
+                BlockWhere::StasisDesktop => {
+                    let b = f.stasis.blocks.last_mut().ok_or("block missing")?;
+                    b.lines.push(Line { key: k, raw_value: v });
                 }
-            }
+                BlockWhere::StasisAc => {
+                    let b = f.stasis.on_ac.last_mut().ok_or("block missing")?;
+                    b.lines.push(Line { key: k, raw_value: v });
+                }
+                BlockWhere::StasisBattery => {
+                    let b = f.stasis.on_battery.last_mut().ok_or("block missing")?;
+                    b.lines.push(Line { key: k, raw_value: v });
+                }
+                BlockWhere::Profile => {
+                    let p = f.profiles.last_mut().ok_or("profile missing")?;
+                    let b = p.blocks.last_mut().ok_or("profile block missing")?;
+                    b.lines.push(Line { key: k, raw_value: v });
+                }
+            },
             None => {
                 // top-level non-block kv; keep as meta-ish
                 f.globals.push(Line { key: k, raw_value: v });
@@ -247,6 +340,37 @@ fn normalize_key(k: &str) -> String {
 
 /* ---------------- emitting ---------------- */
 
+fn old_wants_loginctl(old: &OldFile) -> bool {
+    fn block_wants_loginctl(b: &OldBlock) -> bool {
+        let name = b.name.trim().replace('-', "_");
+        if name != "lock_screen" {
+            return false;
+        }
+
+        for l in &b.lines {
+            if l.key == "use_loginctl"
+                && l.raw_value.trim().split_whitespace().next()
+                    == Some("true")
+            {
+                return true;
+            }
+            if l.key == "command" && l.raw_value.contains("loginctl lock-session") {
+                return true;
+            }
+        }
+        false
+    }
+
+    old.stasis.blocks.iter().any(block_wants_loginctl)
+        || old.stasis.on_ac.iter().any(block_wants_loginctl)
+        || old.stasis.on_battery.iter().any(block_wants_loginctl)
+        || old
+            .profiles
+            .iter()
+            .flat_map(|p| p.blocks.iter())
+            .any(block_wants_loginctl)
+}
+
 fn emit_new(old: &OldFile) -> String {
     let mut out = String::new();
 
@@ -261,6 +385,19 @@ fn emit_new(old: &OldFile) -> String {
 
     // DEFAULT
     out.push_str("default:\n");
+
+    // If old config implied loginctl mode, hoist it to global.
+    let want_loginctl = old_wants_loginctl(old);
+    let has_enable_already = old
+        .stasis
+        .globals
+        .iter()
+        .any(|l| l.key == "enable_loginctl");
+
+    if want_loginctl && !has_enable_already {
+        out.push_str("  enable_loginctl true\n");
+    }
+
     emit_globals(&mut out, &old.stasis.globals, 2);
 
     // Desktop blocks (inside default)
@@ -311,6 +448,11 @@ fn emit_globals(out: &mut String, lines: &[Line], indent: usize) {
             continue;
         }
 
+        // drop per-block loginctl key (now global)
+        if l.key == "use_loginctl" {
+            continue;
+        }
+
         // rename notify-before-command -> notify_before_action
         let key = if l.key == "notify_before_command" {
             "notify_before_action".to_string()
@@ -355,11 +497,22 @@ fn emit_block(out: &mut String, b: &OldBlock, indent: usize) {
             "resume_command" | "resume-command" => resume_command = Some(l.raw_value.clone()),
             "lock_command" | "lock-command" => lock_command = Some(l.raw_value.clone()),
             "notification" => notification = Some(l.raw_value.clone()),
-            "notify_seconds_before" | "notify-seconds-before" => notify_seconds_before = Some(l.raw_value.clone()),
+            "notify_seconds_before" | "notify-seconds-before" => {
+                notify_seconds_before = Some(l.raw_value.clone())
+            }
+            "use_loginctl" => {
+                // dropped; handled globally
+            }
             _ => {
                 // pass through unknown keys as-is (normalized)
                 let k = l.key.replace('-', "_");
-                out.push_str(&format!("{:indent2$}{} {}\n", "", k, l.raw_value, indent2 = indent + 2));
+                out.push_str(&format!(
+                    "{:indent2$}{} {}\n",
+                    "",
+                    k,
+                    l.raw_value,
+                    indent2 = indent + 2
+                ));
             }
         }
     }
@@ -368,7 +521,9 @@ fn emit_block(out: &mut String, b: &OldBlock, indent: usize) {
         out.push_str(&format!("{:indent2$}timeout {}\n", "", t, indent2 = indent + 2));
     }
 
-    // Lock special case: loginctl + lock-command => use_loginctl true, command=lock-command
+    // Lock special case:
+    // - Old configs sometimes used command="loginctl lock-session" plus lock_command="<locker>"
+    // - New configs: loginctl is global (enable_loginctl); lock_screen.command should be the locker.
     let is_lock = name == "lock_screen";
     if is_lock {
         let cmd_is_loginctl = command
@@ -376,19 +531,23 @@ fn emit_block(out: &mut String, b: &OldBlock, indent: usize) {
             .map(|c| c.contains("loginctl lock-session"))
             .unwrap_or(false);
 
-        if cmd_is_loginctl && lock_command.is_some() {
-            out.push_str(&format!("{:indent2$}use_loginctl true\n", "", indent2 = indent + 2));
-            out.push_str(&format!(
-                "{:indent2$}command {}\n",
-                "",
-                lock_command.unwrap(),
-                indent2 = indent + 2
-            ));
-        } else {
-            out.push_str(&format!("{:indent2$}use_loginctl false\n", "", indent2 = indent + 2));
-            if let Some(c) = command {
-                out.push_str(&format!("{:indent2$}command {}\n", "", c, indent2 = indent + 2));
+        if cmd_is_loginctl {
+            if let Some(lc) = lock_command {
+                out.push_str(&format!(
+                    "{:indent2$}command {}\n",
+                    "",
+                    lc,
+                    indent2 = indent + 2
+                ));
+            } else {
+                out.push_str(&format!(
+                    "{:indent2$}# TODO: lock_screen.command missing (was loginctl lock-session)\n",
+                    "",
+                    indent2 = indent + 2
+                ));
             }
+        } else if let Some(c) = command {
+            out.push_str(&format!("{:indent2$}command {}\n", "", c, indent2 = indent + 2));
         }
     } else if let Some(c) = command {
         out.push_str(&format!("{:indent2$}command {}\n", "", c, indent2 = indent + 2));

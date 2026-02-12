@@ -130,6 +130,9 @@ fn parse_config_file(rc: &RuneConfig) -> Result<ConfigFile, String> {
             // ---- parse default ----
             let mut cfg = Config::disabled();
 
+            // Global loginctl integration toggle (lock/unlock monitoring via login1).
+            cfg.enable_loginctl = rc.get_or("default.enable_loginctl", false);
+
             // scalars/lists under default
             cfg.pre_suspend_command = opt_nullable_string(rc, "default.pre_suspend_command")?;
 
@@ -176,7 +179,11 @@ fn parse_config_file(rc: &RuneConfig) -> Result<ConfigFile, String> {
             // ---- profiles ----
             let profiles = parse_profiles(rc)?;
 
-            let cfg_file = ConfigFile { default: cfg, profiles, active_profile: None };
+            let cfg_file = ConfigFile {
+                default: cfg,
+                profiles,
+                active_profile: None,
+            };
 
             log_config_debug(&cfg_file);
 
@@ -208,6 +215,7 @@ fn parse_plan_block(
         matches!(
             norm,
             "mode"
+                | "enable_loginctl"
                 | "pre_suspend_command"
                 | "monitor_media"
                 | "ignore_remote_media"
@@ -225,7 +233,6 @@ fn parse_plan_block(
             || rc.has(&format!("{base}.resume_command"))
             || rc.has(&format!("{base}.notification"))
             || rc.has(&format!("{base}.notify_seconds_before"))
-            || rc.has(&format!("{base}.use_loginctl"))
     }
 
     for raw_k in keys {
@@ -248,10 +255,10 @@ fn parse_plan_block(
             );
         }
 
-        // Enforce: use_loginctl only allowed on lock_screen.
-        if k_norm != "lock_screen" && rc.has(&format!("{base}.use_loginctl")) {
+        // Legacy key guard: use_loginctl removed (global enable_loginctl replaces it).
+        if rc.has(&format!("{base}.use_loginctl")) {
             eventline::warn!(
-                "config: `{}` has use-loginctl set, but use-loginctl is only valid in `lock_screen:`; ignoring it",
+                "config: `{}` uses use-loginctl, but use-loginctl was removed; use `default.enable_loginctl` instead",
                 base
             );
         }
@@ -266,7 +273,6 @@ fn parse_plan_block(
                     timeout_seconds: lb.timeout_seconds,
                     command: lb.command,
                     resume_command: lb.resume_command,
-                    use_loginctl: lb.use_loginctl,
                     notification: lb.notification,
                     notify_seconds_before: lb.notify_seconds_before,
                 });
@@ -360,6 +366,7 @@ fn parse_profiles(rc: &RuneConfig) -> Result<Vec<Profile>, String> {
         let mut pc = PartialConfig::default();
 
         // globals (profile-level overrides)
+        pc.enable_loginctl = opt_bool(rc, format!("{name}.enable_loginctl"))?;
         pc.pre_suspend_command = opt_nullable_string(rc, format!("{name}.pre_suspend_command"))?
             .map(Some);
 
@@ -405,7 +412,6 @@ fn step_from_action_block(kind: PlanStepKind, ab: ActionBlock) -> PlanStep {
         timeout_seconds: ab.timeout_seconds,
         command: ab.command,
         resume_command: ab.resume_command,
-        use_loginctl: false,
         notification: ab.notification,
         notify_seconds_before: ab.notify_seconds_before,
     }
@@ -436,8 +442,6 @@ fn parse_lock_block(rc: &RuneConfig, base: &str) -> Result<LockBlock, String> {
     let command = opt_string(rc, format!("{base}.command"))?;
     let resume_command = opt_string(rc, format!("{base}.resume_command"))?;
 
-    let use_loginctl = rc.get_or(&format!("{base}.use_loginctl"), false);
-
     let notification = opt_string(rc, format!("{base}.notification"))?;
     let notify_seconds_before = opt_u64(rc, format!("{base}.notify_seconds_before"))?;
 
@@ -445,7 +449,6 @@ fn parse_lock_block(rc: &RuneConfig, base: &str) -> Result<LockBlock, String> {
         timeout_seconds,
         command,
         resume_command,
-        use_loginctl,
         notification,
         notify_seconds_before,
     })
@@ -554,6 +557,7 @@ fn log_config_debug(cfg_file: &ConfigFile) {
     let cfg = &cfg_file.default;
 
     eventline::debug!("Parsed config:");
+    eventline::debug!("  enable_loginctl = {:?}", cfg.enable_loginctl);
     eventline::debug!("  pre_suspend_command = {:?}", cfg.pre_suspend_command);
 
     eventline::debug!("  monitor_media = {:?}", cfg.monitor_media);
@@ -599,11 +603,7 @@ fn dump_plan(plan: &[PlanStep]) {
     let mut n = 0usize;
 
     for step in plan {
-        if step.command.is_none()
-            && step.resume_command.is_none()
-            && step.notification.is_none()
-            && !(step.is_lock() && step.use_loginctl)
-        {
+        if step.command.is_none() && step.resume_command.is_none() && step.notification.is_none() {
             continue;
         }
 
@@ -629,9 +629,6 @@ fn dump_plan(plan: &[PlanStep]) {
         }
         if let Some(resume_cmd) = &step.resume_command {
             line.push_str(&format!(", resume_command=\"{}\"", resume_cmd));
-        }
-        if step.is_lock() && step.use_loginctl {
-            line.push_str(", use_loginctl=true");
         }
         if let Some(notification) = &step.notification {
             line.push_str(&format!(", notification=\"{}\"", notification));

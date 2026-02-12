@@ -54,6 +54,9 @@ fn default_laptop_config() -> String {
 #   depending on current power source.
 
 default:
+  # Optional: enable loginctl integration (login1 is source of truth for lock/unlock)
+  #enable_loginctl true
+
   # Optional: run before suspending (e.g., ensure lock is up)
   #pre_suspend_command "swaylock"
 
@@ -123,9 +126,6 @@ default:
     lock_screen:
       timeout 60 # 1 minute(s) after dpms
       command "swaylock"
-
-      # Optional loginctl integration for lock step only:
-      #use_loginctl true
     end
 
     suspend:
@@ -149,6 +149,9 @@ fn default_desktop_config() -> String {
 @description "Lightweight feature packed idle manager for Wayland"
 
 default:
+  # Optional: enable loginctl integration (login1 is source of truth for lock/unlock)
+  #enable_loginctl true
+
   # Optional: run before suspending (e.g., ensure lock is up)
   #pre_suspend_command "swaylock"
 
@@ -181,9 +184,6 @@ default:
     # Optional per-step notification:
     #notification "Locking in 10s"
     #notify_seconds_before 10
-
-    # Optional loginctl integration for lock step only:
-    #use_loginctl true
   end
 
   dpms:

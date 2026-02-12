@@ -43,10 +43,8 @@ impl Manager {
             let instant = if step.is_instant() { " (instant)" } else { "" };
             let timeout = step.timeout_seconds;
 
-            let cmd = if step.command.is_some() {
-                step.command.as_deref().unwrap()
-            } else if matches!(step.kind, PlanStepKind::LockScreen) && step.use_loginctl {
-                "<loginctl lock-session>"
+            let cmd = if let Some(c) = step.command.as_deref() {
+                c
             } else {
                 "<none>"
             };

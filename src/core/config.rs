@@ -58,9 +58,6 @@ pub struct PlanStep {
     /// Optional resume command to run on user activity after this step has fired.
     pub resume_command: Option<String>,
 
-    /// Lock-specific: if true, Stasis should also use loginctl integration for locking.
-    pub use_loginctl: bool,
-
     /// Optional notification emitted before firing this step.
     pub notification: Option<String>,
 
@@ -73,16 +70,12 @@ impl PlanStep {
     ///
     /// NOTE: `timeout_seconds == 0` is *not* disabled; it's an instant one-shot.
     pub fn enabled(&self) -> bool {
-        self.command.is_some() || (self.is_lock() && self.use_loginctl)
+        self.command.is_some() 
     }
 
     /// Instant one-shot step: fires immediately once when the plan starts.
     pub fn is_instant(&self) -> bool {
         self.enabled() && self.timeout_seconds == 0
-    }
-
-    pub fn is_lock(&self) -> bool {
-        matches!(self.kind, PlanStepKind::LockScreen)
     }
 }
 
@@ -127,6 +120,7 @@ impl Pattern {
 #[derive(Debug, Clone)]
 pub struct Config {
     // ---- globals ----
+    pub enable_loginctl: bool,
     pub pre_suspend_command: Option<String>,
 
     pub monitor_media: bool,
@@ -163,6 +157,7 @@ pub struct Config {
 impl Config {
     pub fn disabled() -> Self {
         Self {
+            enable_loginctl: false,
             pre_suspend_command: None,
 
             monitor_media: false,
@@ -203,7 +198,6 @@ impl Config {
             timeout_seconds: self.startup.timeout_seconds,
             command: self.startup.command.clone(),
             resume_command: self.startup.resume_command.clone(),
-            use_loginctl: false,
             notification: self.startup.notification.clone(),
             notify_seconds_before: self.startup.notify_seconds_before,
         });
@@ -213,7 +207,6 @@ impl Config {
             timeout_seconds: self.brightness.timeout_seconds,
             command: self.brightness.command.clone(),
             resume_command: self.brightness.resume_command.clone(),
-            use_loginctl: false,
             notification: self.brightness.notification.clone(),
             notify_seconds_before: self.brightness.notify_seconds_before,
         });
@@ -223,7 +216,6 @@ impl Config {
             timeout_seconds: self.lock_screen.timeout_seconds,
             command: self.lock_screen.command.clone(),
             resume_command: self.lock_screen.resume_command.clone(),
-            use_loginctl: self.lock_screen.use_loginctl,
             notification: self.lock_screen.notification.clone(),
             notify_seconds_before: self.lock_screen.notify_seconds_before,
         });
@@ -233,7 +225,6 @@ impl Config {
             timeout_seconds: self.dpms.timeout_seconds,
             command: self.dpms.command.clone(),
             resume_command: self.dpms.resume_command.clone(),
-            use_loginctl: false,
             notification: self.dpms.notification.clone(),
             notify_seconds_before: self.dpms.notify_seconds_before,
         });
@@ -243,7 +234,6 @@ impl Config {
             timeout_seconds: self.suspend.timeout_seconds,
             command: self.suspend.command.clone(),
             resume_command: self.suspend.resume_command.clone(),
-            use_loginctl: false,
             notification: self.suspend.notification.clone(),
             notify_seconds_before: self.suspend.notify_seconds_before,
         });
@@ -312,9 +302,6 @@ pub struct LockBlock {
     pub command: Option<String>,
     pub resume_command: Option<String>,
 
-    /// If true, Stasis should also use loginctl integration for locking.
-    pub use_loginctl: bool,
-
     pub notification: Option<String>,
     pub notify_seconds_before: Option<u64>,
 }
@@ -325,7 +312,6 @@ impl LockBlock {
             timeout_seconds: 0,
             command: None,
             resume_command: None,
-            use_loginctl: false,
             notification: None,
             notify_seconds_before: None,
         }
@@ -342,6 +328,7 @@ pub struct Profile {
 #[derive(Debug, Clone, Default)]
 pub struct PartialConfig {
     // globals
+    pub enable_loginctl: Option<bool>,
     pub pre_suspend_command: Option<Option<String>>,
 
     pub monitor_media: Option<bool>,
