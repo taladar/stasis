@@ -44,7 +44,6 @@ fn step(kind: PlanStepKind, timeout: u64, cmd: &str) -> PlanStep {
         timeout_seconds: timeout,
         command: Some(cmd.to_string()),
         resume_command: None,
-        use_loginctl: false,
         notification: None,
         notify_seconds_before: None,
     }

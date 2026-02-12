@@ -47,9 +47,6 @@ impl Daemon {
             Action::Suspend => {
                 eventline::info!("suspend requested");
             }
-
-            #[cfg(test)]
-            Action::Noop => {}
         }
 
         Ok(())

@@ -28,8 +28,4 @@ pub enum Action {
 
     /// Request system suspend (runtime decides command/system call).
     Suspend,
-
-    /// For debugging / testing: no-op marker.
-    #[cfg(test)]
-    Noop,
 }
