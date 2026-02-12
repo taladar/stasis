@@ -1,13 +1,14 @@
 {
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
+    flake-parts.url = "github:hercules-ci/flake-parts";
   };
 
   outputs =
     inputs@{ self, flake-parts, ... }:
     let
-      inherit (cargoToml.package) name;
       cargoToml = builtins.fromTOML (builtins.readFile ./Cargo.toml);
+      inherit (cargoToml.package) name;
       version = "${cargoToml.package.version}-${self.shortRev or self.dirtyShortRev or "unknown"}";
     in
     flake-parts.lib.mkFlake { inherit inputs; } (
@@ -22,7 +23,6 @@
           { pkgs, ... }:
           {
             devShells = {
-              # nix develop
               default = pkgs.mkShell {
                 name = "stasis-devshell";
                 nativeBuildInputs = with pkgs; [
@@ -34,13 +34,11 @@
                   wayland-protocols
                   dbus
                 ];
+                RUSTFLAGS = "-C target-cpu=native";
+                shellHook = ''
+                  echo "Entering stasis dev shell — run: cargo build, cargo run, or nix build .#stasis"
+                '';
               };
-
-              RUSTFLAGS = "-C target-cpu=native";
-
-              shellHook = ''
-                echo "Entering stasis dev shell — run: cargo build, cargo run, or nix build .#stasis"
-              '';
             };
 
             packages = rec {
