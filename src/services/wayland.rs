@@ -9,8 +9,13 @@ use std::sync::{
 use tokio::sync::{mpsc, watch};
 
 use wayland_client::{
-    protocol::{wl_registry, wl_seat::WlSeat},
-    Connection, Dispatch, QueueHandle,
+    protocol::{
+        wl_keyboard::WlKeyboard,
+        wl_pointer::WlPointer,
+        wl_registry,
+        wl_seat::{self, WlSeat},
+    },
+    Connection, Dispatch, QueueHandle, WEnum,
 };
 use wayland_protocols::ext::idle_notify::v1::client::{
     ext_idle_notifier_v1::ExtIdleNotifierV1,
@@ -44,6 +49,10 @@ struct WaylandState {
     seat: Option<WlSeat>,
     notification: Option<ExtIdleNotificationV1>,
 
+    // Direct input listeners so activity is immediate (no idle-notify edge cases)
+    pointer: Option<WlPointer>,
+    keyboard: Option<WlKeyboard>,
+
     idle_timeout_ms: u32,
 }
 
@@ -54,6 +63,8 @@ impl WaylandState {
             idle_notifier: None,
             seat: None,
             notification: None,
+            pointer: None,
+            keyboard: None,
             idle_timeout_ms,
         }
     }
@@ -107,16 +118,82 @@ impl Dispatch<ExtIdleNotifierV1, ()> for WaylandState {
     }
 }
 
+// ---------------- Seat capabilities -> bind pointer/keyboard ----------------
+
 impl Dispatch<WlSeat, ()> for WaylandState {
     fn event(
-        _: &mut Self,
-        _: &WlSeat,
-        _: wayland_client::protocol::wl_seat::Event,
+        state: &mut Self,
+        seat: &WlSeat,
+        event: wl_seat::Event,
+        _: &(),
+        _: &Connection,
+        qh: &QueueHandle<Self>,
+    ) {
+        match event {
+            wl_seat::Event::Capabilities { capabilities } => {
+                // wayland-client gives WEnum<Capability> here.
+                let caps = match capabilities {
+                    WEnum::Value(c) => c,
+                    WEnum::Unknown(_) => return,
+                };
+
+                if caps.contains(wl_seat::Capability::Pointer) && state.pointer.is_none() {
+                    state.pointer = Some(seat.get_pointer(qh, ()));
+                    eventline::info!("wayland: wl_pointer active");
+                }
+
+                if caps.contains(wl_seat::Capability::Keyboard) && state.keyboard.is_none() {
+                    state.keyboard = Some(seat.get_keyboard(qh, ()));
+                    eventline::info!("wayland: wl_keyboard active");
+                }
+            }
+            wl_seat::Event::Name { .. } => {}
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<WlPointer, ()> for WaylandState {
+    fn event(
+        state: &mut Self,
+        _: &WlPointer,
+        event: wayland_client::protocol::wl_pointer::Event,
         _: &(),
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        // no-op
+        use wayland_client::protocol::wl_pointer::Event as PE;
+        match event {
+            PE::Motion { .. }
+            | PE::Button { .. }
+            | PE::Axis { .. }
+            | PE::AxisDiscrete { .. }
+            | PE::AxisValue120 { .. }
+            | PE::AxisStop { .. }
+            | PE::AxisSource { .. } => {
+                state.emit_activity();
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<WlKeyboard, ()> for WaylandState {
+    fn event(
+        state: &mut Self,
+        _: &WlKeyboard,
+        event: wayland_client::protocol::wl_keyboard::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        use wayland_client::protocol::wl_keyboard::Event as KE;
+        match event {
+            KE::Key { .. } => {
+                state.emit_activity();
+            }
+            _ => {}
+        }
     }
 }
 
@@ -131,15 +208,13 @@ impl Dispatch<ExtIdleNotificationV1, ()> for WaylandState {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        // We only need "Resumed" as a clean "some input happened" signal.
-        // The manager's logic already treats UserActivity as "reset idle cycle".
+        // Still useful, but no longer the *only* activity signal.
         match event {
             IdleEvent::Resumed => {
                 state.emit_activity();
             }
             IdleEvent::Idled => {
-                // You *could* emit a custom idle event here, but core doesn't have one.
-                // Tick already handles timing, so this is intentionally ignored.
+                // intentionally ignored; core timing is driven by Tick
             }
             _ => {}
         }
@@ -150,13 +225,13 @@ impl Dispatch<ExtIdleNotificationV1, ()> for WaylandState {
 ///
 /// - Connects to Wayland from env
 /// - Sets up ext_idle_notifier_v1 if available
+/// - Also binds wl_pointer/wl_keyboard from wl_seat for immediate activity events
 /// - Runs a blocking dispatch loop in a blocking task
 pub async fn run_wayland(
     tx: mpsc::Sender<ManagerMsg>,
     mut shutdown: watch::Receiver<bool>,
 ) -> Result<(), WaylandError> {
-    // Small timeout gives fast "Resumed" events after any inactivity.
-    // (It does not spam; it's transition-based.)
+    // This can stay at 250ms now; pointer/keyboard provide immediate activity.
     let idle_timeout_ms: u32 = 250;
 
     eventline::info!("wayland: starting (idle_timeout_ms={})", idle_timeout_ms);
@@ -181,7 +256,7 @@ pub async fn run_wayland(
         eventline::info!("wayland: ext_idle_notifier_v1 active");
     } else {
         eventline::warn!(
-            "wayland: ext_idle_notifier_v1 or wl_seat missing; activity events disabled"
+            "wayland: ext_idle_notifier_v1 or wl_seat missing; idle notifier disabled"
         );
     }
 
