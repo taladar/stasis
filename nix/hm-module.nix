@@ -16,13 +16,14 @@ let
 
   cfg = config.services.stasis;
 
+  # systemd "Path=" expects directories, so use /bin explicitly for store packages.
   defaultServicePath = [
     "/run/current-system/sw/bin"
     "/etc/profiles/per-user/%u/bin"
     "/nix/var/nix/profiles/default/bin"
-    pkgs.bash
-    pkgs.coreutils
-    pkgs.systemd
+    "${pkgs.bash}/bin"
+    "${pkgs.coreutils}/bin"
+    "${pkgs.systemd}/bin"
   ];
 in
 {
@@ -59,7 +60,7 @@ in
 
     environmentFile = mkOption {
       type = types.nullOr types.str;
-      default = "%t/stasis.env";
+      default = "%h/.config/stasis/stasis.env";
       description = ''
         Optional environment file read by the Stasis systemd user service.
         Useful for compositor-specific variables like NIRI_SOCKET.
@@ -76,7 +77,9 @@ in
         Description = "Stasis Wayland Idle Manager";
         PartOf = [ cfg.target ];
         After = [ cfg.target ];
-        X-Restart-Triggers = optional (cfg.extraConfig != null)
+
+        # Restart the service when the config file changes (if HM manages it).
+        X-RestartIfChanged = optional (cfg.extraConfig != null)
           config.xdg.configFile."stasis/stasis.rune".source;
       };
 
@@ -86,14 +89,11 @@ in
           ExecStart = "${getExe cfg.package} ${escapeShellArgs cfg.extraArgs}";
           Restart = "on-failure";
 
+          # Only passes vars that exist in the systemd --user manager environment.
           PassEnvironment = [
             "NIRI_SOCKET"
             "WAYLAND_DISPLAY"
             "XDG_RUNTIME_DIR"
-          ];
-
-          Environment = [
-            "XDG_RUNTIME_DIR=%t"
           ];
         }
         // (mkIf (cfg.environmentFile != null) {
@@ -102,7 +102,9 @@ in
 
       path = defaultServicePath;
 
-      Install.WantedBy = [ cfg.target ];
+      Install = {
+        WantedBy = [ cfg.target ];
+      };
     };
 
     xdg.configFile."stasis/stasis.rune" = mkIf (cfg.extraConfig != null) {

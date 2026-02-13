@@ -22,13 +22,14 @@ let
     "/etc/stasis/stasis.rune"
   ];
 
+  # systemd "Path=" expects directories, so use /bin explicitly for store packages.
   defaultServicePath = [
     "/run/current-system/sw/bin"
     "/etc/profiles/per-user/%u/bin"
     "/nix/var/nix/profiles/default/bin"
-    pkgs.bash
-    pkgs.coreutils
-    pkgs.systemd
+    "${pkgs.bash}/bin"
+    "${pkgs.coreutils}/bin"
+    "${pkgs.systemd}/bin"
   ];
 in
 {
@@ -77,7 +78,7 @@ in
 
       environmentFile = mkOption {
         type = types.nullOr types.str;
-        default = "%t/stasis.env";
+        default = "%h/.config/stasis/stasis.env";
         description = ''
           Optional environment file read by the Stasis systemd user service.
           Useful for compositor-specific variables like NIRI_SOCKET.
@@ -107,14 +108,11 @@ in
           ExecStart = "${getExe cfg.package} ${escapeShellArgs cfg.extraArgs}";
           Restart = "on-failure";
 
+          # Only passes vars that exist in the systemd --user manager environment.
           PassEnvironment = [
             "NIRI_SOCKET"
             "WAYLAND_DISPLAY"
             "XDG_RUNTIME_DIR"
-          ];
-
-          Environment = [
-            "XDG_RUNTIME_DIR=%t"
           ];
         }
         // (mkIf (cfg.environmentFile != null) {
