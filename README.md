@@ -201,6 +201,16 @@ Guidelines:
 
 ---
 
+## ❤️ Support Development
+
+If you find this project useful, consider sponsoring its development.
+
+GitHub Sponsors helps ensure continued maintenance, faster bug fixes, and long-term improvements.
+
+➡ https://github.com/sponsors/saltnpepper97
+
+---
+
 ## License
 
 Released under the MIT License.
