@@ -56,6 +56,16 @@ in
       default = [ ];
       description = "Extra arguments to pass to Stasis.";
     };
+
+    environmentFile = mkOption {
+      type = types.nullOr types.str;
+      default = "%t/stasis.env";
+      description = ''
+        Optional environment file read by the Stasis systemd user service.
+        Useful for compositor-specific variables like NIRI_SOCKET.
+        Set to null to disable.
+      '';
+    };
   };
 
   config = mkIf cfg.enable {
@@ -70,11 +80,25 @@ in
           config.xdg.configFile."stasis/stasis.rune".source;
       };
 
-      Service = {
-        Type = "simple";
-        ExecStart = "${getExe cfg.package} ${escapeShellArgs cfg.extraArgs}";
-        Restart = "on-failure";
-      };
+      Service =
+        {
+          Type = "simple";
+          ExecStart = "${getExe cfg.package} ${escapeShellArgs cfg.extraArgs}";
+          Restart = "on-failure";
+
+          PassEnvironment = [
+            "NIRI_SOCKET"
+            "WAYLAND_DISPLAY"
+            "XDG_RUNTIME_DIR"
+          ];
+
+          Environment = [
+            "XDG_RUNTIME_DIR=%t"
+          ];
+        }
+        // (mkIf (cfg.environmentFile != null) {
+          EnvironmentFile = [ "-${cfg.environmentFile}" ];
+        });
 
       path = defaultServicePath;
 

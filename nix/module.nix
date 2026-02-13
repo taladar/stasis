@@ -22,9 +22,6 @@ let
     "/etc/stasis/stasis.rune"
   ];
 
-  # Provide a sane PATH for systemd user services on NixOS.
-  # `path` entries get their /bin added automatically for store paths.
-  # For string paths, systemd uses them directly (expects .../bin layout).
   defaultServicePath = [
     "/run/current-system/sw/bin"
     "/etc/profiles/per-user/%u/bin"
@@ -77,6 +74,16 @@ in
           The default arguments from this module will be **ignored** if you override this.
         '';
       };
+
+      environmentFile = mkOption {
+        type = types.nullOr types.str;
+        default = "%t/stasis.env";
+        description = ''
+          Optional environment file read by the Stasis systemd user service.
+          Useful for compositor-specific variables like NIRI_SOCKET.
+          Set to null to disable.
+        '';
+      };
     };
   };
 
@@ -94,11 +101,25 @@ in
 
       path = defaultServicePath;
 
-      serviceConfig = {
-        Type = "simple";
-        ExecStart = "${getExe cfg.package} ${escapeShellArgs cfg.extraArgs}";
-        Restart = "on-failure";
-      };
+      serviceConfig =
+        {
+          Type = "simple";
+          ExecStart = "${getExe cfg.package} ${escapeShellArgs cfg.extraArgs}";
+          Restart = "on-failure";
+
+          PassEnvironment = [
+            "NIRI_SOCKET"
+            "WAYLAND_DISPLAY"
+            "XDG_RUNTIME_DIR"
+          ];
+
+          Environment = [
+            "XDG_RUNTIME_DIR=%t"
+          ];
+        }
+        // (mkIf (cfg.environmentFile != null) {
+          EnvironmentFile = [ "-${cfg.environmentFile}" ];
+        });
     };
 
     environment.etc."stasis/stasis.rune" = mkIf (cfg.extraConfig != null) {
