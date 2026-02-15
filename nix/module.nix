@@ -13,6 +13,7 @@ let
     optional
     optionals
     literalExpression
+    makeBinPath
     ;
 
   cfg = config.services.stasis;
@@ -22,15 +23,19 @@ let
     "/etc/stasis/stasis.rune"
   ];
 
-  # systemd "Path=" expects directories, so use /bin explicitly for store packages.
-  defaultServicePath = [
-    "/run/current-system/sw/bin"
-    "/etc/profiles/per-user/%u/bin"
-    "/nix/var/nix/profiles/default/bin"
-    "${pkgs.bash}/bin"
-    "${pkgs.coreutils}/bin"
-    "${pkgs.systemd}/bin"
+  # systemd.user.services.<name>.path expects *packages* (derivations),
+  # NOT literal directories.
+  servicePathPkgs = with pkgs; [
+    bashInteractive
+    coreutils
+    systemd
   ];
+
+  explicitPath =
+    "/run/current-system/sw/bin"
+    + ":/etc/profiles/per-user/%u/bin"
+    + ":/nix/var/nix/profiles/default/bin"
+    + ":${makeBinPath servicePathPkgs}";
 in
 {
   options = {
@@ -97,10 +102,13 @@ in
       partOf = [ cfg.target ];
       wantedBy = [ cfg.target ];
 
-      restartTriggers = optional (cfg.extraConfig != null)
-        config.environment.etc."stasis/stasis.rune".source;
+      # If your systemd flags X-Restart-Triggers as "bad-setting",
+      # do NOT emit it. Leave this off.
+      # restartTriggers = optional (cfg.extraConfig != null)
+      #   config.environment.etc."stasis/stasis.rune".source;
 
-      path = defaultServicePath;
+      # IMPORTANT: packages, not dirs
+      path = servicePathPkgs;
 
       serviceConfig =
         {
@@ -108,7 +116,11 @@ in
           ExecStart = "${getExe cfg.package} ${escapeShellArgs cfg.extraArgs}";
           Restart = "on-failure";
 
-          # Only passes vars that exist in the systemd --user manager environment.
+          # Make PATH deterministic and avoid /bin/bin mistakes.
+          Environment = [
+            "PATH=${explicitPath}"
+          ];
+
           PassEnvironment = [
             "NIRI_SOCKET"
             "WAYLAND_DISPLAY"

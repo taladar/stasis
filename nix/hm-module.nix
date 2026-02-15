@@ -12,19 +12,27 @@ let
     escapeShellArgs
     getExe
     literalExpression
+    makeBinPath
     ;
 
   cfg = config.services.stasis;
 
-  # systemd "Path=" expects directories, so use /bin explicitly for store packages.
-  defaultServicePath = [
-    "/run/current-system/sw/bin"
-    "/etc/profiles/per-user/%u/bin"
-    "/nix/var/nix/profiles/default/bin"
-    "${pkgs.bash}/bin"
-    "${pkgs.coreutils}/bin"
-    "${pkgs.systemd}/bin"
+  # IMPORTANT:
+  # systemd.user.services.<name>.path expects *packages* (derivations),
+  # NOT literal directories. Nix will append /bin automatically.
+  servicePathPkgs = with pkgs; [
+    bashInteractive
+    coreutils
+    systemd
   ];
+
+  # If you still want the "system profile" bins first, set PATH explicitly.
+  # This avoids the /bin/bin bug entirely.
+  explicitPath =
+    "/run/current-system/sw/bin"
+    + ":/etc/profiles/per-user/%u/bin"
+    + ":/nix/var/nix/profiles/default/bin"
+    + ":${makeBinPath servicePathPkgs}";
 in
 {
   options.services.stasis = {
@@ -77,11 +85,16 @@ in
         Description = "Stasis Wayland Idle Manager";
         PartOf = [ cfg.target ];
         After = [ cfg.target ];
-
-        # Restart the service when the config file changes (if HM manages it).
-        X-RestartIfChanged = optional (cfg.extraConfig != null)
-          config.xdg.configFile."stasis/stasis.rune".source;
       };
+
+      # Home Manager supports restartTriggers too; it will still emit
+      # X-Restart-Triggers in the unit. If your systemd marks that "bad-setting",
+      # you should avoid it and instead rely on `home-manager switch` restart,
+      # or add an explicit ExecReload strategy in your app.
+      #
+      # For now: keep it OFF to avoid the bad-setting state.
+      # restartTriggers = optional (cfg.extraConfig != null)
+      #   config.xdg.configFile."stasis/stasis.rune".source;
 
       Service =
         {
@@ -89,7 +102,11 @@ in
           ExecStart = "${getExe cfg.package} ${escapeShellArgs cfg.extraArgs}";
           Restart = "on-failure";
 
-          # Only passes vars that exist in the systemd --user manager environment.
+          # Make PATH deterministic and avoid /bin/bin mistakes.
+          Environment = [
+            "PATH=${explicitPath}"
+          ];
+
           PassEnvironment = [
             "NIRI_SOCKET"
             "WAYLAND_DISPLAY"
@@ -100,7 +117,8 @@ in
           EnvironmentFile = [ "-${cfg.environmentFile}" ];
         });
 
-      path = defaultServicePath;
+      # IMPORTANT: This is packages, not dirs.
+      path = servicePathPkgs;
 
       Install = {
         WantedBy = [ cfg.target ];
