@@ -102,6 +102,8 @@ in
           ExecStart = "${getExe cfg.package} ${escapeShellArgs cfg.extraArgs}";
           Restart = "on-failure";
 
+          Slice = "session.slice";
+
           # Make PATH deterministic and avoid /bin/bin mistakes.
           Environment = [
             "PATH=${explicitPath}"
@@ -111,6 +113,7 @@ in
             "NIRI_SOCKET"
             "WAYLAND_DISPLAY"
             "XDG_RUNTIME_DIR"
+            "DBUS_SESSION_BUS_ADDRESS"
           ];
         }
         // (mkIf (cfg.environmentFile != null) {
