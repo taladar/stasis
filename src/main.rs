@@ -8,7 +8,6 @@ mod core;
 mod daemon;
 mod ipc;
 mod services;
-mod stasis_log;
 
 use clap::Parser;
 

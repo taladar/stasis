@@ -4,6 +4,9 @@
 use crate::daemon::Daemon;
 use std::io;
 use std::path::PathBuf;
+use eventline::journal::rotation::LogPolicy;
+use eventline::runtime::enable_file_output_rotating;
+use eventline::runtime::run_header::RunHeader;
 
 use crate::cli::Args;
 
@@ -36,24 +39,13 @@ pub async fn run(args: Args) -> Result<(), AnyError> {
 
     // file logging
     if let Some(path) = crate::app::platform::default_log_path() {
-        let needs_blank =
-            crate::stasis_log::prepare_log_file(&path, crate::stasis_log::LogPolicy::default())
-                .unwrap_or(false);
+        let header = RunHeader::new("stasis daemon run start");
+        let policy = LogPolicy::default();
 
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-
-        if let Err(e) = eventline::runtime::enable_file_output(&path) {
+        if let Err(e) = enable_file_output_rotating(&path, policy, Some(header)) {
             eventline::error!("failed to enable file logging: {}", e);
         } else {
             eventline::info!("file logging enabled: {}", path.display());
-
-            if needs_blank {
-                let _ = crate::stasis_log::write_raw_blank_line(&path);
-            }
-
-            let _ = crate::stasis_log::write_raw_line(&path, &crate::stasis_log::run_header());
         }
     }
 
