@@ -3,7 +3,7 @@
 
 use crate::core::{
     action::Action,
-    config::{Config, PlanSource, PlanStep, PlanStepKind},
+    config::{Config, LidAction, PlanSource, PlanStep, PlanStepKind},
     error::{ConfigError, Error, StateError},
     events::{Event, MediaState, PowerState},
     state::State,
@@ -174,12 +174,24 @@ impl Manager {
             }
 
             Event::LidClosed { .. } => {
+                // Lid close pauses the plan timers like before.
                 state.set_system_paused(true);
                 self.refresh_paused(state, now_ms);
+
+                // Run configured lid-close action (if any).
+                if let Some(la) = &cfg.lid_close_action {
+                    out.extend(self.actions_for_lid_action(state, la, &cfg));
+                }
             }
 
             Event::LidOpened { .. } => {
+                // Lid open resumes timers like before.
                 state.set_system_paused(false);
+
+                // Run configured lid-open action (if any) before we treat this like activity.
+                if let Some(la) = &cfg.lid_open_action {
+                    out.extend(self.actions_for_lid_action(state, la, &cfg));
+                }
 
                 self.handle_activity_like_event(state, &cfg, now_ms, &mut out);
 
@@ -676,6 +688,59 @@ impl Manager {
                 .clone()
                 .map(|c| vec![Action::RunCommand { command: c }])
                 .unwrap_or_default(),
+        }
+    }
+
+    /// Find the PlanStep referenced by a builtin LidAction.
+    ///
+    /// NOTE: we only return an existing step from cfg.plan. We do NOT try to
+    /// synthesize a step from legacy blocks here, because `cfg.plan_desktop`
+    /// is already rebuilt from legacy blocks in the loader when needed.
+    fn resolve_builtin_lid_step<'a>(
+        &self,
+        cfg: &'a Config,
+        kind: &PlanStepKind,
+    ) -> Option<&'a PlanStep> {
+        cfg.plan
+            .iter()
+            .find(|s| s.enabled() && Self::plan_kind_matches(kind, &s.kind))
+    }
+
+    fn plan_kind_matches(a: &PlanStepKind, b: &PlanStepKind) -> bool {
+        match (a, b) {
+            (PlanStepKind::Custom(x), PlanStepKind::Custom(y)) => x == y,
+            _ => std::mem::discriminant(a) == std::mem::discriminant(b),
+        }
+    }
+
+    /// Convert a LidAction into executable Actions.
+    /// - Builtin => reuses the configured plan step (so suspend/lock special logic is preserved)
+    /// - Command => runs that command
+    fn actions_for_lid_action(&self, state: &State, la: &LidAction, cfg: &Config) -> Vec<Action> {
+        match la {
+            LidAction::Command(cmd) => {
+                let c = cmd.trim();
+                if c.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![Action::RunCommand {
+                        command: c.to_string(),
+                    }]
+                }
+            }
+            LidAction::Builtin(kind) => {
+                let Some(step) = self.resolve_builtin_lid_step(cfg, kind) else {
+                    eventline::warn!(
+                        "lid action builtin {:?} has no matching configured step",
+                        kind
+                    );
+                    return Vec::new();
+                };
+
+                // IMPORTANT: reuse the same action emission logic as plan steps,
+                // so lock/suspend special behavior stays consistent.
+                self.actions_for_plan_step(state, step, cfg)
+            }
         }
     }
 

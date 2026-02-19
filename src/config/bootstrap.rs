@@ -52,11 +52,14 @@ fn default_laptop_config() -> String {
 # - On laptops, Stasis chooses between:
 #     `default.ac:` and `default.battery:`
 #   depending on current power source.
+# - Lid actions live under `default:` (globals) so they apply on BOTH AC and Battery
+#   unless a profile overlays/clears them.
 
 default:
   # Optional: listen for loginctl lock/unlock-session signals (default false)
-  # NOTE: only sets internal state PAST/BEFORE lock state if received,
-  # it does not actually run your lock command.
+  # NOTE: this only updates internal state when lock/unlock signals are received;
+  # it does not actually run your locker command.
+  #enable_loginctl true
 
   # Optional: run before suspending (e.g., ensure lock is up)
   #pre_suspend_command "swaylock"
@@ -82,6 +85,27 @@ default:
     "mpv"
     r"steam_app_.*"
   ]
+
+  # -----------------------------
+  # Lid actions (LAPTOP ONLY)
+  #
+  # These run immediately on lid events.
+  #
+  # You can set either:
+  #   - a builtin step name: "lock_screen" | "dpms" | "suspend" | "brightness" | "startup"
+  #     (runs that step's command using the same logic as the plan step)
+  #   - OR a raw shell command string.
+  #
+  # NOTE:
+  # - Lid close/open still pauses/resumes the plan timers like before.
+  # - These are GLOBAL under `default:` so they apply to BOTH `ac:` and `battery:` plans.
+  #
+  # Examples:
+  #   lid_close_action "lock_screen"
+  #   lid_open_action  "brightnessctl set 60%"
+  # -----------------------------
+  #lid_close_action "lock_screen"
+  #lid_open_action  "dpms"
 
   # Laptop plan: AC power (relaxed)
   ac:
@@ -151,8 +175,8 @@ fn default_desktop_config() -> String {
 
 default:
   # Optional: listen for loginctl lock/unlock-session signals (default false)
-  # NOTE: only sets internal state PAST/BEFORE lock state if received,
-  # it does not actually run your lock command.
+  # NOTE: this only updates internal state when lock/unlock signals are received;
+  # it does not actually run your locker command.
   #enable_loginctl true
 
   # Optional: run before suspending (e.g., ensure lock is up)

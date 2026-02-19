@@ -1,8 +1,8 @@
 // Author: Dustin Pilgrim
 // License: MIT
 
-use std::fmt;
 use regex::Regex;
+use std::fmt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProfileMode {
@@ -14,7 +14,7 @@ pub enum ProfileMode {
 
 impl Default for ProfileMode {
     fn default() -> Self {
-        // New semantics: if mode is omitted, overlay is the least surprising.
+        // If mode is omitted, overlay is least surprising.
         ProfileMode::Overlay
     }
 }
@@ -42,8 +42,8 @@ pub enum PlanStepKind {
 
 /// One step in the ordered plan.
 ///
-/// This is the canonical representation the manager consumes.
-/// The loader should preserve file order when building plans.
+/// Canonical representation the manager consumes.
+/// Loader should preserve file order when building plans.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanStep {
     pub kind: PlanStepKind,
@@ -66,11 +66,11 @@ pub struct PlanStep {
 }
 
 impl PlanStep {
-    /// Enabled if it has a command OR is a lock step using loginctl.
+    /// Enabled if it has a command.
     ///
     /// NOTE: `timeout_seconds == 0` is *not* disabled; it's an instant one-shot.
     pub fn enabled(&self) -> bool {
-        self.command.is_some() 
+        self.command.is_some()
     }
 
     /// Instant one-shot step: fires immediately once when the plan starts.
@@ -81,7 +81,7 @@ impl PlanStep {
 
 /// Pattern used for inhibit lists (app inhibit + media blacklist).
 ///
-/// - Literals are expected to already be normalized lowercase by the config loader.
+/// - Literals expected to already be normalized lowercase by the config loader.
 /// - Regex values are compiled by rune-cfg already (Value::Regex).
 #[derive(Debug, Clone)]
 pub enum Pattern {
@@ -115,13 +115,23 @@ impl Pattern {
     }
 }
 
-// NOTE: We cannot derive Eq/PartialEq for Config/PartialConfig anymore because Regex
-// doesn't implement those traits. Keep Debug+Clone; this is enough for your daemon flow.
+/// Global lid actions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LidAction {
+    Builtin(PlanStepKind),
+    Command(String),
+}
+
+// NOTE: We cannot derive Eq/PartialEq for Config anymore because Regex
+// doesn't implement those traits. Debug+Clone is enough for daemon flow.
 #[derive(Debug, Clone)]
 pub struct Config {
     // ---- globals ----
     pub enable_loginctl: bool,
     pub pre_suspend_command: Option<String>,
+
+    pub lid_close_action: Option<LidAction>,
+    pub lid_open_action: Option<LidAction>,
 
     pub monitor_media: bool,
     pub ignore_remote_media: bool,
@@ -145,7 +155,7 @@ pub struct Config {
     pub dpms: ActionBlock,
     pub suspend: ActionBlock,
 
-    // ---- canonical plan sources (NEW) ----
+    // ---- canonical plan sources ----
     pub plan_desktop: Vec<PlanStep>,
     pub plan_ac: Vec<PlanStep>,
     pub plan_battery: Vec<PlanStep>,
@@ -154,11 +164,20 @@ pub struct Config {
     pub plan: Vec<PlanStep>,
 }
 
+impl Default for Config {
+    fn default() -> Self {
+        Self::disabled()
+    }
+}
+
 impl Config {
     pub fn disabled() -> Self {
         Self {
             enable_loginctl: false,
             pre_suspend_command: None,
+
+            lid_close_action: None,
+            lid_open_action: None,
 
             monitor_media: false,
             ignore_remote_media: false,
@@ -191,54 +210,48 @@ impl Config {
             return;
         }
 
-        let mut plan = Vec::new();
-
-        plan.push(PlanStep {
-            kind: PlanStepKind::Startup,
-            timeout_seconds: self.startup.timeout_seconds,
-            command: self.startup.command.clone(),
-            resume_command: self.startup.resume_command.clone(),
-            notification: self.startup.notification.clone(),
-            notify_seconds_before: self.startup.notify_seconds_before,
-        });
-
-        plan.push(PlanStep {
-            kind: PlanStepKind::Brightness,
-            timeout_seconds: self.brightness.timeout_seconds,
-            command: self.brightness.command.clone(),
-            resume_command: self.brightness.resume_command.clone(),
-            notification: self.brightness.notification.clone(),
-            notify_seconds_before: self.brightness.notify_seconds_before,
-        });
-
-        plan.push(PlanStep {
-            kind: PlanStepKind::LockScreen,
-            timeout_seconds: self.lock_screen.timeout_seconds,
-            command: self.lock_screen.command.clone(),
-            resume_command: self.lock_screen.resume_command.clone(),
-            notification: self.lock_screen.notification.clone(),
-            notify_seconds_before: self.lock_screen.notify_seconds_before,
-        });
-
-        plan.push(PlanStep {
-            kind: PlanStepKind::Dpms,
-            timeout_seconds: self.dpms.timeout_seconds,
-            command: self.dpms.command.clone(),
-            resume_command: self.dpms.resume_command.clone(),
-            notification: self.dpms.notification.clone(),
-            notify_seconds_before: self.dpms.notify_seconds_before,
-        });
-
-        plan.push(PlanStep {
-            kind: PlanStepKind::Suspend,
-            timeout_seconds: self.suspend.timeout_seconds,
-            command: self.suspend.command.clone(),
-            resume_command: self.suspend.resume_command.clone(),
-            notification: self.suspend.notification.clone(),
-            notify_seconds_before: self.suspend.notify_seconds_before,
-        });
-
-        self.plan_desktop = plan;
+        self.plan_desktop = vec![
+            PlanStep {
+                kind: PlanStepKind::Startup,
+                timeout_seconds: self.startup.timeout_seconds,
+                command: self.startup.command.clone(),
+                resume_command: self.startup.resume_command.clone(),
+                notification: self.startup.notification.clone(),
+                notify_seconds_before: self.startup.notify_seconds_before,
+            },
+            PlanStep {
+                kind: PlanStepKind::Brightness,
+                timeout_seconds: self.brightness.timeout_seconds,
+                command: self.brightness.command.clone(),
+                resume_command: self.brightness.resume_command.clone(),
+                notification: self.brightness.notification.clone(),
+                notify_seconds_before: self.brightness.notify_seconds_before,
+            },
+            PlanStep {
+                kind: PlanStepKind::LockScreen,
+                timeout_seconds: self.lock_screen.timeout_seconds,
+                command: self.lock_screen.command.clone(),
+                resume_command: self.lock_screen.resume_command.clone(),
+                notification: self.lock_screen.notification.clone(),
+                notify_seconds_before: self.lock_screen.notify_seconds_before,
+            },
+            PlanStep {
+                kind: PlanStepKind::Dpms,
+                timeout_seconds: self.dpms.timeout_seconds,
+                command: self.dpms.command.clone(),
+                resume_command: self.dpms.resume_command.clone(),
+                notification: self.dpms.notification.clone(),
+                notify_seconds_before: self.dpms.notify_seconds_before,
+            },
+            PlanStep {
+                kind: PlanStepKind::Suspend,
+                timeout_seconds: self.suspend.timeout_seconds,
+                command: self.suspend.command.clone(),
+                resume_command: self.suspend.resume_command.clone(),
+                notification: self.suspend.notification.clone(),
+                notify_seconds_before: self.suspend.notify_seconds_before,
+            },
+        ];
     }
 
     /// Select which plan source is active (after profile application).
@@ -264,12 +277,6 @@ impl Config {
     }
 }
 
-impl Default for Config {
-    fn default() -> Self {
-        Self::disabled()
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActionBlock {
     pub timeout_seconds: u64,
@@ -280,7 +287,6 @@ pub struct ActionBlock {
     pub notification: Option<String>,
 
     /// Wait N seconds after notification before firing the command.
-    /// (Manager semantics define the exact timing behavior.)
     pub notify_seconds_before: Option<u64>,
 }
 
@@ -327,15 +333,17 @@ pub struct Profile {
 
 #[derive(Debug, Clone, Default)]
 pub struct PartialConfig {
-    // globals
+    // ---- globals ----
     pub enable_loginctl: Option<bool>,
     pub pre_suspend_command: Option<Option<String>>,
+
+    pub lid_close_action: Option<Option<LidAction>>,
+    pub lid_open_action: Option<Option<LidAction>>,
 
     pub monitor_media: Option<bool>,
     pub ignore_remote_media: Option<bool>,
 
     pub media_blacklist: Option<Vec<Pattern>>,
-
     pub debounce_seconds: Option<u64>,
 
     pub notify_on_unpause: Option<bool>,
@@ -343,12 +351,12 @@ pub struct PartialConfig {
 
     pub inhibit_apps: Option<Vec<Pattern>>,
 
-    // plan sources (NEW) — profiles can override/extend them
+    // ---- plan sources ----
     pub plan_desktop: Option<Vec<PlanStep>>,
     pub plan_ac: Option<Vec<PlanStep>>,
     pub plan_battery: Option<Vec<PlanStep>>,
 
-    // legacy blocks (optional)
+    // ---- legacy blocks ----
     pub startup: Option<ActionBlock>,
     pub brightness: Option<ActionBlock>,
     pub lock_screen: Option<LockBlock>,
@@ -377,8 +385,19 @@ fn merge_plan(base: &mut Vec<PlanStep>, overlay: Vec<PlanStep>) {
 impl PartialConfig {
     pub fn apply_to(&self, base: &mut Config, mode: ProfileMode) {
         // ---- globals ----
+        if let Some(v) = self.enable_loginctl {
+            base.enable_loginctl = v;
+        }
+
         if let Some(v) = &self.pre_suspend_command {
             base.pre_suspend_command = v.clone();
+        }
+
+        if let Some(v) = &self.lid_close_action {
+            base.lid_close_action = v.clone();
+        }
+        if let Some(v) = &self.lid_open_action {
+            base.lid_open_action = v.clone();
         }
 
         if let Some(v) = self.monitor_media {
@@ -450,7 +469,7 @@ impl PartialConfig {
             }
         }
 
-        // active plan is re-selected later
+        // Active plan is re-selected later.
         base.plan.clear();
     }
 }

@@ -27,9 +27,6 @@ pub trait EventSink: Send + Sync + 'static {
 /// - Lock/Unlock (org.freedesktop.login1.Session)
 ///
 /// Lid events via UPower are always monitored.
-///
-/// IMPORTANT: This runs in a dedicated OS thread. That thread MUST terminate on shutdown,
-/// otherwise the stasis process will never exit (even if the main async loop stops).
 pub fn spawn_dbus_listeners(
     sink: Arc<dyn EventSink>,
     enable_loginctl: bool,

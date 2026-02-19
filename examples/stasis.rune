@@ -23,6 +23,23 @@ default:
   ignore_remote_media true
   debounce_seconds 5
 
+  # Lid actions (optional)
+  #
+  # These run on lid close/open on laptops.
+  # Value can be:
+  #   - a builtin step name (startup|brightness|dpms|lock_screen|suspend)
+  #   - OR a raw command string (anything else)
+  #
+  # Examples:
+  #   lid_close_action "lock_screen"         # reuse lock_screen step behavior
+  #   lid_close_action "systemctl suspend"   # run command directly
+  #   lid_open_action  "dpms"                # reuse dpms resume rules etc.
+  #
+  # NOTE: Lid actions live under `default:` (global) so they apply for both
+  #       `default.ac:` and `default.battery:` without duplicating them.
+  lid_close_action "lock_screen"
+  #lid_open_action "dpms"
+
   # When resuming from IPC pause timers (e.g. `stasis pause 1h`)
   notify_on_unpause true
 
