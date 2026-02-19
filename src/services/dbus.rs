@@ -15,7 +15,7 @@ use zbus::{Connection, MatchRule, Proxy};
 use crate::core::events::Event;
 
 /// Sink for pushing events into the (sync) manager loop.
-/// Implement this for whatever channel/queue you’re using.
+/// Implement this for whatever channel/queue you're using.
 pub trait EventSink: Send + Sync + 'static {
     fn push(&self, ev: Event);
 }
@@ -106,41 +106,78 @@ async fn run_dbus(
             }
         }
 
-        // 2) Lock/Unlock (login1 Session)
+        // 2) Lock/Unlock via broadcast match rules on ALL session objects.
+        //
+        // WHY: The old approach resolved a specific session object path via
+        // get_current_session_path() and subscribed only to that session's
+        // signals. This breaks on NixOS (and any setup where the user's
+        // systemd --user services start before logind has registered a session
+        // for that UID), because:
+        //   - XDG_SESSION_ID may not be set in the service environment
+        //   - ListSessions returns nothing for the UID at startup
+        //   - GetSessionByPID fails: "NoSessionForPID: PID N does not belong
+        //     to any known session"
+        // The session may appear later once the compositor is fully up, but
+        // we already gave up.
+        //
+        // FIX: Use MatchRule-based broadcast listeners that catch Lock/Unlock
+        // from ANY session object under /org/freedesktop/login1/session/*.
+        // We never need to resolve a session path at all. Since Lock/Unlock are
+        // only sent to the owning session and there is typically one graphical
+        // session per user, this is safe and correct.
+        //
+        // NOTE: get_current_session_path() is kept below for potential future
+        // use (e.g. reading session properties), but is no longer called here.
         {
-            match get_current_session_path(&sys).await {
-                Ok(session_path) => {
-                    eventline::info!("D-Bus: monitoring session {}", session_path.as_str());
+            let lock_rule = match MatchRule::builder()
+                .msg_type(zbus::message::Type::Signal)
+                .interface("org.freedesktop.login1.Session")?
+                .member("Lock")?
+                .build()
+            {
+                r => r,
+            };
 
-                    let proxy = Proxy::new(
-                        &sys,
-                        "org.freedesktop.login1",
-                        session_path,
-                        "org.freedesktop.login1.Session",
-                    )
-                    .await?;
+            let unlock_rule = match MatchRule::builder()
+                .msg_type(zbus::message::Type::Signal)
+                .interface("org.freedesktop.login1.Session")?
+                .member("Unlock")?
+                .build()
+            {
+                r => r,
+            };
 
-                    let mut lock_stream = proxy.receive_signal("Lock").await?;
-                    let mut unlock_stream = proxy.receive_signal("Unlock").await?;
-
-                    let sink_lock = sink.clone();
+            match zbus::MessageStream::for_match_rule(lock_rule, &sys, None).await {
+                Ok(mut stream) => {
+                    let sink = sink.clone();
+                    eventline::info!("D-Bus: monitoring Lock signals from all sessions (broadcast)");
                     tokio::spawn(async move {
-                        while let Some(_) = lock_stream.next().await {
-                            sink_lock.push(Event::SessionLocked { now_ms: now_ms() });
-                        }
-                    });
-
-                    let sink_unlock = sink.clone();
-                    tokio::spawn(async move {
-                        while let Some(_) = unlock_stream.next().await {
-                            sink_unlock.push(Event::SessionUnlocked { now_ms: now_ms() });
+                        while let Some(msg) = stream.next().await {
+                            if msg.is_ok() {
+                                sink.push(Event::SessionLocked { now_ms: now_ms() });
+                            }
                         }
                     });
                 }
                 Err(e) => {
-                    eventline::warn!(
-                        "D-Bus: could not resolve session path for lock/unlock: {e:?}"
-                    );
+                    eventline::warn!("D-Bus: could not subscribe to Lock signals: {e:?}");
+                }
+            }
+
+            match zbus::MessageStream::for_match_rule(unlock_rule, &sys, None).await {
+                Ok(mut stream) => {
+                    let sink = sink.clone();
+                    eventline::info!("D-Bus: monitoring Unlock signals from all sessions (broadcast)");
+                    tokio::spawn(async move {
+                        while let Some(msg) = stream.next().await {
+                            if msg.is_ok() {
+                                sink.push(Event::SessionUnlocked { now_ms: now_ms() });
+                            }
+                        }
+                    });
+                }
+                Err(e) => {
+                    eventline::warn!("D-Bus: could not subscribe to Unlock signals: {e:?}");
                 }
             }
         }
@@ -194,12 +231,9 @@ async fn run_dbus(
 
     // ✅ IMPORTANT: do NOT block forever; exit this thread on shutdown.
     loop {
-        // If shutdown was already set before we started listening:
         if *shutdown.borrow() {
             break;
         }
-
-        // Wait for shutdown to change
         let _ = shutdown.changed().await;
         if *shutdown.borrow() {
             break;
@@ -209,8 +243,13 @@ async fn run_dbus(
     Ok(())
 }
 
-// ---- Session path resolution (ported from old stasis) ----
+// ---- Session path resolution ----
+//
+// Kept for potential future use (reading session properties, etc.).
+// No longer called for Lock/Unlock monitoring — see the broadcast match rule
+// approach in run_dbus() above, which is NixOS-compatible.
 
+#[allow(dead_code)]
 async fn get_current_session_path(
     connection: &Connection,
 ) -> zbus::Result<zbus::zvariant::OwnedObjectPath> {
@@ -274,7 +313,7 @@ async fn get_current_session_path(
         }
     }
 
-    // 4) Fallback PID method
+    // 4) Last resort: PID method (fails on NixOS user services without PAMName=login)
     let pid = std::process::id();
     let path: zbus::zvariant::OwnedObjectPath = proxy.call("GetSessionByPID", &(pid,)).await?;
     Ok(path)

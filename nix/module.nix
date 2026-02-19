@@ -1,21 +1,19 @@
 { package }:
 { config, lib, pkgs, ... }:
-
 let
   inherit (lib)
     mkEnableOption
     mkPackageOption
     mkIf
+    mkMerge
     getExe
     mkOption
     types
     escapeShellArgs
-    optional
     optionals
     literalExpression
     makeBinPath
     ;
-
   cfg = config.services.stasis;
 
   defaultArgs = optionals (cfg.extraConfig != null) [
@@ -23,14 +21,11 @@ let
     "/etc/stasis/stasis.rune"
   ];
 
-  # systemd.user.services.<name>.path expects *packages* (derivations),
-  # NOT literal directories.
   servicePathPkgs = with pkgs; [
     bashInteractive
     coreutils
     systemd
   ];
-
   explicitPath =
     "/run/current-system/sw/bin"
     + ":/etc/profiles/per-user/%u/bin"
@@ -49,12 +44,20 @@ in
         default = null;
         description = ''
           The literal contents of the Stasis configuration file.
-
           If set, Nix will write this text to:
           `/etc/stasis/stasis.rune`.
         '';
         example = literalExpression ''
-          # (example omitted)
+          default:
+            lock_screen:
+              timeout 300
+              command "swaylock"
+            end
+            suspend:
+              timeout 600
+              command "systemctl suspend"
+            end
+          end
         '';
       };
 
@@ -69,14 +72,12 @@ in
         default = defaultArgs;
         defaultText = literalExpression ''
           if services.stasis.extraConfig != null then
-          [
-            "-c"
-            "/etc/stasis/stasis.rune"
-          ] else []
+            [ "-c" "/etc/stasis/stasis.rune" ]
+          else
+            []
         '';
         description = ''
           Extra arguments to pass to Stasis.
-
           The default arguments from this module will be **ignored** if you override this.
         '';
       };
@@ -102,34 +103,34 @@ in
       partOf = [ cfg.target ];
       wantedBy = [ cfg.target ];
 
-      # If your systemd flags X-Restart-Triggers as "bad-setting",
-      # do NOT emit it. Leave this off.
-      # restartTriggers = optional (cfg.extraConfig != null)
-      #   config.environment.etc."stasis/stasis.rune".source;
-
-      # IMPORTANT: packages, not dirs
+      # path expects derivations, not literal paths — systemd will append /bin.
+      # We also set PATH explicitly in serviceConfig.Environment below so that
+      # the ordering is deterministic and system profile bins come first.
       path = servicePathPkgs;
 
-      serviceConfig =
+      serviceConfig = mkMerge [
         {
           Type = "simple";
           ExecStart = "${getExe cfg.package} ${escapeShellArgs cfg.extraArgs}";
           Restart = "on-failure";
-
-          # Make PATH deterministic and avoid /bin/bin mistakes.
+          # Explicit PATH; keeps environment predictable regardless of the
+          # user's profile state at service start time.
           Environment = [
             "PATH=${explicitPath}"
           ];
-
           PassEnvironment = [
             "NIRI_SOCKET"
             "WAYLAND_DISPLAY"
             "XDG_RUNTIME_DIR"
           ];
         }
-        // (mkIf (cfg.environmentFile != null) {
+        # mkMerge (not //) is required: // is a plain Nix attribute merge and
+        # does not understand mkIf. When environmentFile is null, mkIf returns
+        # a special lib sentinel rather than {}, which breaks the merge.
+        (mkIf (cfg.environmentFile != null) {
           EnvironmentFile = [ "-${cfg.environmentFile}" ];
-        });
+        })
+      ];
     };
 
     environment.etc."stasis/stasis.rune" = mkIf (cfg.extraConfig != null) {
