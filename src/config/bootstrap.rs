@@ -89,23 +89,18 @@ default:
   # -----------------------------
   # Lid actions (LAPTOP ONLY)
   #
-  # These run immediately on lid events.
+  # Shell commands run immediately on lid close or open.
+  # Lid close/open also pause/resume the plan timers regardless.
   #
-  # You can set either:
-  #   - a builtin step name: "lock_screen" | "dpms" | "suspend" | "brightness" | "startup"
-  #     (runs that step's command using the same logic as the plan step)
-  #   - OR a raw shell command string.
-  #
-  # NOTE:
-  # - Lid close/open still pauses/resumes the plan timers like before.
-  # - These are GLOBAL under `default:` so they apply to BOTH `ac:` and `battery:` plans.
+  # These are GLOBAL under `default:` so they apply to BOTH `ac:` and `battery:` plans.
+  # A profile can override them or clear them (set to "").
   #
   # Examples:
-  #   lid_close_action "lock_screen"
+  #   lid_close_action "swaylock"
   #   lid_open_action  "brightnessctl set 60%"
   # -----------------------------
-  #lid_close_action "lock_screen"
-  #lid_open_action  "dpms"
+  #lid_close_action "swaylock"
+  #lid_open_action  ""
 
   # Laptop plan: AC power (relaxed)
   ac:

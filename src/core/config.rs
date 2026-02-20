@@ -115,13 +115,6 @@ impl Pattern {
     }
 }
 
-/// Global lid actions.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum LidAction {
-    Builtin(PlanStepKind),
-    Command(String),
-}
-
 // NOTE: We cannot derive Eq/PartialEq for Config anymore because Regex
 // doesn't implement those traits. Debug+Clone is enough for daemon flow.
 #[derive(Debug, Clone)]
@@ -130,8 +123,10 @@ pub struct Config {
     pub enable_loginctl: bool,
     pub pre_suspend_command: Option<String>,
 
-    pub lid_close_action: Option<LidAction>,
-    pub lid_open_action: Option<LidAction>,
+    /// Shell command to run immediately when the lid is closed (if any).
+    pub lid_close_action: Option<String>,
+    /// Shell command to run immediately when the lid is opened (if any).
+    pub lid_open_action: Option<String>,
 
     pub monitor_media: bool,
     pub ignore_remote_media: bool,
@@ -337,8 +332,9 @@ pub struct PartialConfig {
     pub enable_loginctl: Option<bool>,
     pub pre_suspend_command: Option<Option<String>>,
 
-    pub lid_close_action: Option<Option<LidAction>>,
-    pub lid_open_action: Option<Option<LidAction>>,
+    /// `None` = no override; `Some(None)` = clear; `Some(Some(cmd))` = set command.
+    pub lid_close_action: Option<Option<String>>,
+    pub lid_open_action: Option<Option<String>>,
 
     pub monitor_media: Option<bool>,
     pub ignore_remote_media: Option<bool>,

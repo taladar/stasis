@@ -23,22 +23,22 @@ default:
   ignore_remote_media true
   debounce_seconds 5
 
-  # Lid actions (optional)
+  # Lid actions (optional, laptop only)
   #
-  # These run on lid close/open on laptops.
-  # Value can be:
-  #   - a builtin step name (startup|brightness|dpms|lock_screen|suspend)
-  #   - OR a raw command string (anything else)
+  # Shell commands run immediately on lid close or open.
+  # Lid close/open also pause/resume the plan timers regardless.
+  #
+  # These live under `default:` (global) so they apply for both
+  # `default.ac:` and `default.battery:` without duplicating them.
+  #
+  # A profile can override or clear them (set to "").
   #
   # Examples:
-  #   lid_close_action "lock_screen"         # reuse lock_screen step behavior
-  #   lid_close_action "systemctl suspend"   # run command directly
-  #   lid_open_action  "dpms"                # reuse dpms resume rules etc.
+  #   lid_close_action "hyprlock"
+  #   lid_open_action  "brightnessctl set 60%"
   #
-  # NOTE: Lid actions live under `default:` (global) so they apply for both
-  #       `default.ac:` and `default.battery:` without duplicating them.
-  lid_close_action "lock_screen"
-  #lid_open_action "dpms"
+  lid_close_action "hyprlock"
+  #lid_open_action ""
 
   # When resuming from IPC pause timers (e.g. `stasis pause 1h`)
   notify_on_unpause true
@@ -70,8 +70,6 @@ default:
     resume_command "hyprctl dispatch dpms on"
   end
 
-  # Lock step:
-  # - then runs the lock command (blocking) so unlock is detected reliably
   lock_screen:
     timeout 300
     command "hyprlock"
@@ -223,6 +221,10 @@ presentation:
   notify_on_unpause false
   notify_before_action false
   inhibit_apps [ ]
+
+  # Clear lid actions so they don't fire during a presentation
+  lid_close_action ""
+  lid_open_action ""
 
   # Keep the display awake / bright; no lock, dpms, suspend unless you add them
   brightness:

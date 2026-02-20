@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use rune_cfg::{RuneConfig, Value};
 
 use crate::core::config::{
-    ActionBlock, Config, ConfigFile, LidAction, LockBlock, PartialConfig, PlanSource, PlanStep,
+    ActionBlock, Config, ConfigFile, LockBlock, PartialConfig, PlanSource, PlanStep,
     PlanStepKind, Profile, ProfileMode, Pattern,
 };
 
@@ -150,7 +150,7 @@ fn parse_config_file(rc: &RuneConfig) -> Result<ConfigFile, String> {
             // allow strings OR /regex/ entries (keep compiled regex)
             cfg.inhibit_apps = get_vec_pattern(rc, "default.inhibit_apps", Vec::new())?;
 
-            // lid actions (optional)
+            // lid actions: plain shell command strings (optional)
             cfg.lid_close_action = parse_lid_action(rc, "default.lid_close_action")?;
             cfg.lid_open_action = parse_lid_action(rc, "default.lid_open_action")?;
 
@@ -375,7 +375,6 @@ fn parse_profiles(rc: &RuneConfig) -> Result<Vec<Profile>, String> {
         pc.enable_loginctl = opt_bool(rc, format!("{name}.enable_loginctl"))?;
         pc.pre_suspend_command = opt_nullable_string2(rc, format!("{name}.pre_suspend_command"))?;
 
-
         pc.monitor_media = opt_bool(rc, format!("{name}.monitor_media"))?;
         pc.ignore_remote_media = opt_bool(rc, format!("{name}.ignore_remote_media"))?;
 
@@ -385,7 +384,7 @@ fn parse_profiles(rc: &RuneConfig) -> Result<Vec<Profile>, String> {
         pc.notify_before_action = opt_bool(rc, format!("{name}.notify_before_action"))?;
         pc.inhibit_apps = opt_vec_pattern(rc, &format!("{name}.inhibit_apps"))?;
 
-        // lid actions (profile overrides)
+        // lid action profile overrides (None = no override, Some(None) = clear, Some(Some(cmd)) = set)
         pc.lid_close_action = parse_lid_action_override(rc, &format!("{name}.lid_close_action"))?;
         pc.lid_open_action = parse_lid_action_override(rc, &format!("{name}.lid_open_action"))?;
 
@@ -466,35 +465,29 @@ fn parse_lock_block(rc: &RuneConfig, base: &str) -> Result<LockBlock, String> {
 
 // ---- lid action parsing ----
 
-fn parse_lid_action(rc: &RuneConfig, path: &str) -> Result<Option<LidAction>, String> {
-    let Some(raw) = opt_string(rc, path)? else {
-        return Ok(None);
-    };
-    parse_lid_action_from_str(&raw)
+/// Read an optional lid action command string.
+/// Empty string is treated the same as absent (returns None).
+fn parse_lid_action(rc: &RuneConfig, path: &str) -> Result<Option<String>, String> {
+    match opt_string(rc, path)? {
+        None => Ok(None),
+        Some(s) if s.trim().is_empty() => Ok(None),
+        Some(s) => Ok(Some(s)),
+    }
 }
 
-/// Accepts either:
-/// - one of: startup|brightness|dpms|suspend  (case-insensitive) => Builtin
-/// - anything else => Command(string)
-fn parse_lid_action_from_str(raw: &str) -> Result<Option<LidAction>, String> {
-    let s = raw.trim();
-    if s.is_empty() {
-        return Ok(None);
+/// For profile overrides:
+/// - missing key        => None            (no override; leave default as-is)
+/// - present but empty  => Some(None)      (clear the action)
+/// - present non-empty  => Some(Some(cmd)) (set a new command)
+fn parse_lid_action_override(
+    rc: &RuneConfig,
+    path: &str,
+) -> Result<Option<Option<String>>, String> {
+    match opt_string(rc, path)? {
+        None => Ok(None),
+        Some(s) if s.trim().is_empty() => Ok(Some(None)),
+        Some(s) => Ok(Some(Some(s))),
     }
-
-    let k = s.to_ascii_lowercase();
-    let builtin = match k.as_str() {
-        "startup" => Some(PlanStepKind::Startup),
-        "brightness" => Some(PlanStepKind::Brightness),
-        "dpms" => Some(PlanStepKind::Dpms),
-        "suspend" => Some(PlanStepKind::Suspend),
-        _ => None,
-    };
-
-    Ok(Some(match builtin {
-        Some(kind) => LidAction::Builtin(kind),
-        None => LidAction::Command(s.to_string()),
-    }))
 }
 
 // ---- minimal typed helpers ----
@@ -693,26 +686,5 @@ fn dump_plan(plan: &[PlanStep]) {
         }
 
         eventline::debug!("{}", line);
-    }
-}
-
-/// For profile overrides:
-/// - missing key => None (no override)
-/// - present but empty => Some(None) (clear)
-/// - present and non-empty => Some(Some(action))
-fn parse_lid_action_override(rc: &RuneConfig, path: &str) -> Result<Option<Option<LidAction>>, String> {
-    let raw = opt_string(rc, path)?;
-    match raw {
-        None => Ok(None),
-        Some(s) => {
-            if s.trim().is_empty() {
-                Ok(Some(None))
-            } else {
-                // parse_lid_action_from_str returns Result<Option<LidAction>, String>
-                // and for non-empty input it returns Ok(Some(...)).
-                let parsed = parse_lid_action_from_str(&s)?;
-                Ok(Some(parsed))
-            }
-        }
     }
 }
