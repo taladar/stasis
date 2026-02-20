@@ -2,12 +2,9 @@
 // License: MIT
 
 use crate::core::{action::Action, events::Event, manager_msg::ManagerMsg};
-
 use tokio::process::Command;
 use tokio::sync::mpsc;
-
 use std::process::Stdio;
-
 use super::{into_any_error, AnyError, Daemon};
 
 impl Daemon {
@@ -18,34 +15,102 @@ impl Daemon {
     ) -> Result<(), AnyError> {
         match action {
             Action::RunLockScreen { command } => {
+                // Already correct: spawns a task, awaits child exit, sends Locked/Unlocked.
                 Self::spawn_lock_screen(tx, command);
             }
 
             Action::RunCommand { command } => {
                 eventline::info!("run: {}", command);
-                crate::core::utils::run_shell_command_silent(&command).map_err(into_any_error)?;
+                let status = Command::new("sh")
+                    .arg("-lc")
+                    .arg(&command)
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()
+                    .await
+                    .map_err(|e| format!("run failed to spawn '{command}': {e}"))?;
+
+                if !status.success() {
+                    eventline::warn!(
+                        "run: '{}' exited with {}",
+                        command,
+                        status.code().unwrap_or(-1)
+                    );
+                }
             }
 
             Action::RunResumeCommand { command } => {
+                // Same issue as RunCommand — must not block the executor.
                 eventline::info!("resume: {}", command);
-                crate::core::utils::run_shell_command_silent(&command).map_err(into_any_error)?;
+                let status = Command::new("sh")
+                    .arg("-lc")
+                    .arg(&command)
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()
+                    .await
+                    .map_err(|e| format!("resume failed to spawn '{command}': {e}"))?;
+
+                if !status.success() {
+                    eventline::warn!(
+                        "resume: '{}' exited with {}",
+                        command,
+                        status.code().unwrap_or(-1)
+                    );
+                }
             }
 
             Action::Notify { message } => {
                 eventline::info!("notify: {}", message);
-                let _ = std::process::Command::new("sh")
+                let escaped = crate::core::utils::escape_single_quotes(&message);
+                let child = std::process::Command::new("sh")
                     .arg("-lc")
-                    .arg(format!(
-                        "notify-send -a Stasis '{}'",
-                        crate::core::utils::escape_single_quotes(&message)
-                    ))
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null())
+                    .arg(format!("notify-send -a Stasis '{escaped}'"))
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
                     .spawn();
+
+                match child {
+                    Ok(child) => {
+                        // Reap in a background blocking task so we don't block here
+                        // and don't leak the zombie.
+                        tokio::task::spawn_blocking(move || {
+                            // into_inner gives us the std Child; wait() reaps it.
+                            let _ = child.wait_with_output();
+                        });
+                    }
+                    Err(e) => {
+                        eventline::warn!("notify: failed to spawn notify-send: {e}");
+                    }
+                }
             }
 
             Action::Suspend => {
-                eventline::info!("suspend requested");
+                // The original code only logged here and never actually suspended.
+                eventline::info!("suspend: requesting system suspend via systemctl");
+                let status = Command::new("systemctl")
+                    .arg("suspend")
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()
+                    .await;
+
+                match status {
+                    Ok(s) if s.success() => {}
+                    Ok(s) => {
+                        eventline::warn!(
+                            "suspend: systemctl suspend exited with {}",
+                            s.code().unwrap_or(-1)
+                        );
+                    }
+                    Err(e) => {
+                        eventline::error!("suspend: failed to spawn systemctl: {e}");
+                    }
+                }
             }
         }
 
@@ -54,7 +119,7 @@ impl Daemon {
 
     fn spawn_lock_screen(tx: mpsc::Sender<ManagerMsg>, command: String) {
         tokio::spawn(async move {
-            // Process-tracked mode is ALWAYS the source of truth.
+            // Process-tracked mode: we are the source of truth for lock state.
             let _ = tx
                 .send(ManagerMsg::Event(Event::SessionLocked {
                     now_ms: crate::core::utils::now_ms(),
@@ -66,6 +131,7 @@ impl Daemon {
             let mut child = match Command::new("sh")
                 .arg("-lc")
                 .arg(command)
+                .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .spawn()
@@ -73,13 +139,11 @@ impl Daemon {
                 Ok(c) => c,
                 Err(e) => {
                     eventline::error!("lock spawn failed: {e}");
-
                     let _ = tx
                         .send(ManagerMsg::Event(Event::SessionUnlocked {
                             now_ms: crate::core::utils::now_ms(),
                         }))
                         .await;
-
                     return;
                 }
             };

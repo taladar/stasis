@@ -58,7 +58,7 @@ pub async fn run_app_inhibit(
                 svc.reconfigure(&rules.apps);
 
                 let now_ms = crate::core::utils::now_ms();
-                if let Some(ev) = svc.poll(now_ms) {
+                if let Some(ev) = svc.poll_async(now_ms).await {
                     if tx.send(ManagerMsg::Event(ev)).await.is_err() {
                         return;
                     }
@@ -67,7 +67,7 @@ pub async fn run_app_inhibit(
 
             _ = tokio::time::sleep(Duration::from_millis(sleep_ms)) => {
                 let now_ms = crate::core::utils::now_ms();
-                if let Some(ev) = svc.poll(now_ms) {
+                if let Some(ev) = svc.poll_async(now_ms).await {
                     if tx.send(ManagerMsg::Event(ev)).await.is_err() {
                         return;
                     }
@@ -128,7 +128,6 @@ impl AppInhibitService {
     pub fn reconfigure(&mut self, inhibit_apps: &[Pattern]) {
         let new_apps = normalize_patterns(inhibit_apps);
 
-        // Avoid requiring Pattern:PartialEq by comparing formatted strings.
         if patterns_same(&self.apps, &new_apps) {
             return;
         }
@@ -148,7 +147,9 @@ impl AppInhibitService {
         self.last_poll_ms = 0;
     }
 
-    pub fn poll(&mut self, now_ms: u64) -> Option<Event> {
+    /// Async-aware poll. Subprocess queries run via `spawn_blocking` so the
+    /// tokio executor thread is never blocked.
+    pub async fn poll_async(&mut self, now_ms: u64) -> Option<Event> {
         if now_ms < self.last_poll_ms.saturating_add(self.poll_interval_ms) {
             return None;
         }
@@ -160,35 +161,78 @@ impl AppInhibitService {
             0
         } else {
             match &self.backend {
-                // IMPORTANT: if Hyprland is selected, DO NOT fall back to /proc.
-                // If IPC fails, keep the previous count so we don't spike/flap.
-                Backend::Hyprland(h) => match h.count_matches_dedup(&self.apps) {
-                    Ok(n) => n,
-                    Err(e) => {
-                        eventline::warn!(
-                            "app_inhibit: hyprland query failed (keeping previous count={}): {}",
-                            prev_count,
-                            e
-                        );
-                        prev_count
+                Backend::Hyprland(_) => {
+                    let apps = self.apps.clone();
+                    match tokio::task::spawn_blocking(move || {
+                        HyprlandBackend::default().count_matches_dedup(&apps)
+                    })
+                    .await
+                    {
+                        Ok(Ok(n)) => n,
+                        Ok(Err(e)) => {
+                            eventline::warn!(
+                                "app_inhibit: hyprland query failed (keeping previous count={}): {}",
+                                prev_count,
+                                e
+                            );
+                            prev_count
+                        }
+                        Err(e) => {
+                            eventline::warn!(
+                                "app_inhibit: hyprland task panicked (keeping previous count={}): {}",
+                                prev_count,
+                                e
+                            );
+                            prev_count
+                        }
                     }
-                },
+                }
 
-                // Same for niri: no /proc fallback if niri backend is selected.
-                Backend::Niri(n) => match n.count_matches_dedup(&self.apps) {
-                    Ok(n) => n,
-                    Err(e) => {
-                        eventline::warn!(
-                            "app_inhibit: niri query failed (keeping previous count={}): {}",
-                            prev_count,
-                            e
-                        );
-                        prev_count
+                Backend::Niri(_) => {
+                    let apps = self.apps.clone();
+                    match tokio::task::spawn_blocking(move || {
+                        NiriBackend::default().count_matches_dedup(&apps)
+                    })
+                    .await
+                    {
+                        Ok(Ok(n)) => n,
+                        Ok(Err(e)) => {
+                            eventline::warn!(
+                                "app_inhibit: niri query failed (keeping previous count={}): {}",
+                                prev_count,
+                                e
+                            );
+                            prev_count
+                        }
+                        Err(e) => {
+                            eventline::warn!(
+                                "app_inhibit: niri task panicked (keeping previous count={}): {}",
+                                prev_count,
+                                e
+                            );
+                            prev_count
+                        }
                     }
-                },
+                }
 
-                // Only used when we couldn't detect a compositor backend.
-                Backend::Proc(p) => p.count_matches_dedup(&self.apps),
+                Backend::Proc(_) => {
+                    let apps = self.apps.clone();
+                    match tokio::task::spawn_blocking(move || {
+                        ProcBackend::default().count_matches_dedup(&apps)
+                    })
+                    .await
+                    {
+                        Ok(n) => n,
+                        Err(e) => {
+                            eventline::warn!(
+                                "app_inhibit: proc task panicked (keeping previous count={}): {}",
+                                prev_count,
+                                e
+                            );
+                            prev_count
+                        }
+                    }
+                }
             }
         };
 
@@ -239,12 +283,10 @@ fn detect_backend() -> Option<Backend> {
 }
 
 fn detect_hyprland_backend() -> Option<Backend> {
-    // Most reliable in-session signal:
     if env::var("HYPRLAND_INSTANCE_SIGNATURE").is_ok() {
         return Some(Backend::Hyprland(HyprlandBackend::default()));
     }
 
-    // Fallback: desktop hint
     if let Ok(desktop) = env::var("XDG_CURRENT_DESKTOP") {
         if desktop.to_lowercase().contains("hyprland") {
             return Some(Backend::Hyprland(HyprlandBackend::default()));
@@ -255,15 +297,12 @@ fn detect_hyprland_backend() -> Option<Backend> {
 }
 
 fn detect_niri_backend() -> Option<Backend> {
-    // Niri usually exports XDG_CURRENT_DESKTOP=niri and/or has `niri` in PATH.
-    // We keep it simple and cheap:
     if let Ok(desktop) = env::var("XDG_CURRENT_DESKTOP") {
         if desktop.to_lowercase().contains("niri") {
             return Some(Backend::Niri(NiriBackend::default()));
         }
     }
 
-    // Secondary hint used by some setups:
     if env::var("NIRI_SOCKET").is_ok() {
         return Some(Backend::Niri(NiriBackend::default()));
     }
@@ -271,7 +310,7 @@ fn detect_niri_backend() -> Option<Backend> {
     None
 }
 
-// ----------------------------- matching helpers (old semantics) -----------------------------
+// ----------------------------- matching helpers -----------------------------
 
 fn should_inhibit_app_id(app_id: &str, patterns: &[Pattern]) -> bool {
     if app_id.is_empty() {
@@ -292,7 +331,6 @@ fn should_inhibit_app_id(app_id: &str, patterns: &[Pattern]) -> bool {
     false
 }
 
-// EXACTLY the old helper behavior.
 fn app_id_matches_static(pattern: &str, app_id: &str) -> bool {
     if pattern.eq_ignore_ascii_case(app_id) {
         return true;
@@ -315,7 +353,6 @@ fn app_id_matches_static(pattern: &str, app_id: &str) -> bool {
 
 impl HyprlandBackend {
     fn count_matches_dedup(&self, apps: &[Pattern]) -> Result<u64, String> {
-        // IMPORTANT: keep this synchronous. If you want async, switch to tokio::process::Command.
         let out = std::process::Command::new("hyprctl")
             .args(["clients", "-j"])
             .output()
@@ -326,14 +363,13 @@ impl HyprlandBackend {
             return Err(format!("hyprctl clients -j failed: {}", err.trim()));
         }
 
-        let v: serde_json::Value =
-            serde_json::from_slice(&out.stdout).map_err(|e| format!("hyprctl json parse failed: {e}"))?;
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout)
+            .map_err(|e| format!("hyprctl json parse failed: {e}"))?;
 
         let arr = v
             .as_array()
             .ok_or_else(|| "hyprctl json: expected array".to_string())?;
 
-        // Old behavior: app_id == class, dedup by app_id.
         let mut seen: HashSet<String> = HashSet::new();
 
         for item in arr {
@@ -355,8 +391,6 @@ impl HyprlandBackend {
 
 impl NiriBackend {
     fn count_matches_dedup(&self, apps: &[Pattern]) -> Result<u64, String> {
-        // Old Stasis parsed: lines starting with `  App ID: `
-        // Example: `  App ID: "firefox"`
         let out = std::process::Command::new("niri")
             .args(["msg", "windows"])
             .output()
@@ -372,9 +406,10 @@ impl NiriBackend {
         let mut seen: HashSet<String> = HashSet::new();
 
         for line in text.lines() {
-            let Some(rest) = line.strip_prefix("  App ID: ") else { continue; };
+            let Some(rest) = line.strip_prefix("  App ID: ") else {
+                continue;
+            };
 
-            // trim quotes if present
             let app_id = rest.trim().trim_matches('"');
             if app_id.is_empty() {
                 continue;
@@ -397,7 +432,6 @@ impl ProcBackend {
             return 0;
         };
 
-        // Dedupe by “matched key” so fallback doesn’t explode counts.
         let mut seen: HashSet<String> = HashSet::new();
 
         for ent in rd.flatten() {
@@ -433,7 +467,6 @@ impl ProcBackend {
 fn proc_match_key(hay: &str, apps: &[Pattern]) -> Option<String> {
     for p in apps {
         let matched = match p {
-            // Old proc behavior was “exact” for literals
             Pattern::Literal(s) => hay.eq_ignore_ascii_case(s),
             Pattern::Regex(r) => r.is_match(hay),
         };

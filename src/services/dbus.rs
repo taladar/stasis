@@ -15,7 +15,7 @@ use zbus::{Connection, MatchRule, Proxy};
 use crate::core::events::Event;
 
 /// Sink for pushing events into the (sync) manager loop.
-/// Implement this for whatever channel/queue you’re using.
+/// Implement this for whatever channel/queue you're using.
 pub trait EventSink: Send + Sync + 'static {
     fn push(&self, ev: Event);
 }
@@ -64,84 +64,95 @@ async fn run_dbus(
 
     if enable_loginctl {
         // 1) PrepareForSleep (login1 Manager)
+        match Proxy::new(
+            &sys,
+            "org.freedesktop.login1",
+            "/org/freedesktop/login1",
+            "org.freedesktop.login1.Manager",
+        )
+        .await
         {
-            let proxy = match Proxy::new(
-                &sys,
-                "org.freedesktop.login1",
-                "/org/freedesktop/login1",
-                "org.freedesktop.login1.Manager",
-            )
-            .await
-            {
-                Ok(p) => p,
-                Err(e) => {
-                    eventline::warn!("D-Bus: login1 Manager proxy unavailable: {e:?}");
-                    // Keep running; lid events may still work.
-                    Proxy::new(
-                        &sys,
-                        "org.freedesktop.DBus",
-                        "/org/freedesktop/DBus",
-                        "org.freedesktop.DBus",
-                    )
-                    .await?
-                }
-            };
-
-            if let Ok(mut stream) = proxy.receive_signal("PrepareForSleep").await {
-                let sink = sink.clone();
-                tokio::spawn(async move {
-                    while let Some(sig) = stream.next().await {
-                        let going_down: bool = match sig.body().deserialize() {
-                            Ok(v) => v,
-                            Err(_) => continue,
-                        };
-                        let t = now_ms();
-                        sink.push(if going_down {
-                            Event::PrepareForSleep { now_ms: t }
-                        } else {
-                            Event::ResumedFromSleep { now_ms: t }
+            Ok(proxy) => {
+                match proxy.receive_signal("PrepareForSleep").await {
+                    Ok(mut stream) => {
+                        let sink = sink.clone();
+                        tokio::spawn(async move {
+                            while let Some(sig) = stream.next().await {
+                                let going_down: bool = match sig.body().deserialize() {
+                                    Ok(v) => v,
+                                    Err(_) => continue,
+                                };
+                                let t = now_ms();
+                                sink.push(if going_down {
+                                    Event::PrepareForSleep { now_ms: t }
+                                } else {
+                                    Event::ResumedFromSleep { now_ms: t }
+                                });
+                            }
                         });
                     }
-                });
+                    Err(e) => {
+                        eventline::warn!("D-Bus: could not subscribe to PrepareForSleep: {e:?}");
+                    }
+                }
+            }
+            Err(e) => {
+                // Do NOT fall back to a different proxy — PrepareForSleep monitoring
+                // is simply unavailable. Log and continue; lid/lock events may still work.
+                eventline::warn!("D-Bus: login1 Manager proxy unavailable: {e:?}; sleep/wake monitoring disabled");
             }
         }
 
         // 2) Lock/Unlock (login1 Session)
-        {
-            match get_current_session_path(&sys).await {
-                Ok(session_path) => {
-                    eventline::info!("D-Bus: monitoring session {}", session_path.as_str());
+        match get_current_session_path(&sys).await {
+            Ok(session_path) => {
+                eventline::info!("D-Bus: monitoring session {}", session_path.as_str());
 
-                    let proxy = Proxy::new(
-                        &sys,
-                        "org.freedesktop.login1",
-                        session_path,
-                        "org.freedesktop.login1.Session",
-                    )
-                    .await?;
+                match Proxy::new(
+                    &sys,
+                    "org.freedesktop.login1",
+                    session_path,
+                    "org.freedesktop.login1.Session",
+                )
+                .await
+                {
+                    Ok(proxy) => {
+                        let lock_stream = proxy.receive_signal("Lock").await;
+                        let unlock_stream = proxy.receive_signal("Unlock").await;
 
-                    let mut lock_stream = proxy.receive_signal("Lock").await?;
-                    let mut unlock_stream = proxy.receive_signal("Unlock").await?;
+                        match (lock_stream, unlock_stream) {
+                            (Ok(mut lock_stream), Ok(mut unlock_stream)) => {
+                                let sink_lock = sink.clone();
+                                tokio::spawn(async move {
+                                    while let Some(_) = lock_stream.next().await {
+                                        sink_lock.push(Event::SessionLocked { now_ms: now_ms() });
+                                    }
+                                });
 
-                    let sink_lock = sink.clone();
-                    tokio::spawn(async move {
-                        while let Some(_) = lock_stream.next().await {
-                            sink_lock.push(Event::SessionLocked { now_ms: now_ms() });
+                                let sink_unlock = sink.clone();
+                                tokio::spawn(async move {
+                                    while let Some(_) = unlock_stream.next().await {
+                                        sink_unlock
+                                            .push(Event::SessionUnlocked { now_ms: now_ms() });
+                                    }
+                                });
+                            }
+                            (Err(e), _) | (_, Err(e)) => {
+                                eventline::warn!(
+                                    "D-Bus: could not subscribe to session Lock/Unlock: {e:?}"
+                                );
+                            }
                         }
-                    });
-
-                    let sink_unlock = sink.clone();
-                    tokio::spawn(async move {
-                        while let Some(_) = unlock_stream.next().await {
-                            sink_unlock.push(Event::SessionUnlocked { now_ms: now_ms() });
-                        }
-                    });
+                    }
+                    Err(e) => {
+                        eventline::warn!("D-Bus: could not create session proxy: {e:?}");
+                    }
                 }
-                Err(e) => {
-                    eventline::warn!(
-                        "D-Bus: could not resolve session path for lock/unlock: {e:?}"
-                    );
-                }
+            }
+            Err(e) => {
+                eventline::warn!(
+                    "D-Bus: could not resolve session path for lock/unlock: {e:?}"
+                );
             }
         }
     } else {
@@ -167,10 +178,11 @@ async fn run_dbus(
                 let Ok(msg) = msg else { continue };
 
                 let body = msg.body();
-                let parsed: (String, HashMap<String, Value>, Vec<String>) = match body.deserialize() {
-                    Ok(v) => v,
-                    Err(_) => continue,
-                };
+                let parsed: (String, HashMap<String, Value>, Vec<String>) =
+                    match body.deserialize() {
+                        Ok(v) => v,
+                        Err(_) => continue,
+                    };
 
                 let (iface, changed, _invalidated) = parsed;
 
@@ -192,14 +204,11 @@ async fn run_dbus(
         });
     }
 
-    // ✅ IMPORTANT: do NOT block forever; exit this thread on shutdown.
+    // Wait for shutdown; do NOT block forever.
     loop {
-        // If shutdown was already set before we started listening:
         if *shutdown.borrow() {
             break;
         }
-
-        // Wait for shutdown to change
         let _ = shutdown.changed().await;
         if *shutdown.borrow() {
             break;
@@ -209,7 +218,7 @@ async fn run_dbus(
     Ok(())
 }
 
-// ---- Session path resolution (ported from old stasis) ----
+// ---- Session path resolution ----
 
 async fn get_current_session_path(
     connection: &Connection,
@@ -274,8 +283,10 @@ async fn get_current_session_path(
         }
     }
 
-    // 4) Fallback PID method
+    // 4) Last-resort: PID method. Note: this will fail for processes running
+    // outside a logind session (e.g. systemd --user services on some compositors).
     let pid = std::process::id();
-    let path: zbus::zvariant::OwnedObjectPath = proxy.call("GetSessionByPID", &(pid,)).await?;
+    let path: zbus::zvariant::OwnedObjectPath =
+        proxy.call("GetSessionByPID", &(pid,)).await?;
     Ok(path)
 }

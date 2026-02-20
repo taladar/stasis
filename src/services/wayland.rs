@@ -92,7 +92,6 @@ impl Dispatch<wl_registry::WlRegistry, ()> for WaylandState {
         if let wl_registry::Event::Global { name, interface, .. } = event {
             match interface.as_str() {
                 "ext_idle_notifier_v1" => {
-                    // Version 1 is enough for our needs.
                     state.idle_notifier =
                         Some(registry.bind::<ExtIdleNotifierV1, _, _>(name, 1, qh, ()));
                 }
@@ -131,7 +130,6 @@ impl Dispatch<WlSeat, ()> for WaylandState {
     ) {
         match event {
             wl_seat::Event::Capabilities { capabilities } => {
-                // wayland-client gives WEnum<Capability> here.
                 let caps = match capabilities {
                     WEnum::Value(c) => c,
                     WEnum::Unknown(_) => return,
@@ -208,7 +206,6 @@ impl Dispatch<ExtIdleNotificationV1, ()> for WaylandState {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        // Still useful, but no longer the *only* activity signal.
         match event {
             IdleEvent::Resumed => {
                 state.emit_activity();
@@ -227,11 +224,11 @@ impl Dispatch<ExtIdleNotificationV1, ()> for WaylandState {
 /// - Sets up ext_idle_notifier_v1 if available
 /// - Also binds wl_pointer/wl_keyboard from wl_seat for immediate activity events
 /// - Runs a blocking dispatch loop in a blocking task
+/// - Awaits the blocking task so the caller can observe completion and panics
 pub async fn run_wayland(
     tx: mpsc::Sender<ManagerMsg>,
     mut shutdown: watch::Receiver<bool>,
 ) -> Result<(), WaylandError> {
-    // This can stay at 250ms now; pointer/keyboard provide immediate activity.
     let idle_timeout_ms: u32 = 250;
 
     eventline::info!("wayland: starting (idle_timeout_ms={})", idle_timeout_ms);
@@ -261,35 +258,43 @@ pub async fn run_wayland(
     }
 
     let stop = Arc::new(AtomicBool::new(false));
-    let stop2 = Arc::clone(&stop);
+    let stop_dispatch = Arc::clone(&stop);
 
-    // Shutdown watcher
+    // Shutdown watcher — sets the stop flag for the blocking loop.
     tokio::spawn(async move {
         loop {
             if *shutdown.borrow() {
-                stop2.store(true, Ordering::Relaxed);
+                stop.store(true, Ordering::Relaxed);
                 break;
             }
             if shutdown.changed().await.is_err() {
-                stop2.store(true, Ordering::Relaxed);
+                stop.store(true, Ordering::Relaxed);
                 break;
             }
         }
     });
 
-    // Run Wayland dispatch in a blocking task.
-    tokio::task::spawn_blocking(move || {
-        while !stop.load(Ordering::Relaxed) {
+    // Run Wayland dispatch in a blocking task and AWAIT it so:
+    //   (a) panics inside the task surface as errors instead of being silently dropped, and
+    //   (b) the task handle isn't leaked when the compositor goes away mid-session.
+    let join = tokio::task::spawn_blocking(move || {
+        while !stop_dispatch.load(Ordering::Relaxed) {
             if let Err(e) = event_queue.blocking_dispatch(&mut state) {
-                let msg = e.to_string();
-                // Keep it non-fatal; a compositor restart should just stop the service.
-                eventline::error!("wayland: dispatch error: {}", msg);
+                // A dispatch error usually means the compositor disconnected.
+                // Log at error level and break cleanly; the outer service loop
+                // (in daemon/run.rs) is responsible for restarting if desired.
+                eventline::error!("wayland: dispatch error: {}", e);
                 break;
             }
         }
 
         eventline::info!("wayland: stopping");
     });
+
+    // Propagate join errors (panics) upward.
+    if let Err(e) = join.await {
+        eventline::error!("wayland: blocking task panicked: {:?}", e);
+    }
 
     Ok(())
 }
