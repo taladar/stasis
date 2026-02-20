@@ -10,18 +10,6 @@ pub fn now_ms() -> u64 {
     d.as_millis() as u64
 }
 
-pub fn run_shell_command_silent(cmd: &str) -> Result<(), Box<dyn std::error::Error>> {
-    use std::process::{Command, Stdio};
-
-    Command::new("sh")
-        .arg("-lc")
-        .arg(cmd)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()?;
-    Ok(())
-}
-
 pub fn escape_single_quotes(s: &str) -> String {
     s.replace('\'', r#"'"'"'"#)
 }

@@ -21,10 +21,6 @@ use crate::services::dbus::EventSink;
 
 type AnyError = Box<dyn std::error::Error + Send + Sync>;
 
-fn into_any_error(e: Box<dyn std::error::Error>) -> AnyError {
-    e.to_string().into()
-}
-
 struct MpscEventSink {
     tx: mpsc::Sender<ManagerMsg>,
 }

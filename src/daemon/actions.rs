@@ -5,7 +5,7 @@ use crate::core::{action::Action, events::Event, manager_msg::ManagerMsg};
 use tokio::process::Command;
 use tokio::sync::mpsc;
 use std::process::Stdio;
-use super::{into_any_error, AnyError, Daemon};
+use super::{AnyError, Daemon};
 
 impl Daemon {
     pub(super) async fn exec_action_with_tx(
