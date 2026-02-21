@@ -3,7 +3,7 @@
 
 use std::collections::HashSet;
 use std::env;
-use std::path::Path;
+use std::mem;
 use std::time::Duration;
 
 use tokio::sync::{mpsc, watch};
@@ -87,6 +87,12 @@ pub struct AppInhibitService {
 
     last_count: Option<u64>, // None => never polled yet
     force_emit: bool,        // next poll must emit and do baseline logging
+
+    /// Reused scratch buffer — `clear()`ed before every poll, never dropped.
+    /// We `mem::take` it into `spawn_blocking` and restore it on return so we
+    /// never allocate a new HashSet on the hot path. If the task panics, the
+    /// field is left as an empty default and a fresh allocation occurs next poll.
+    seen: HashSet<String>,
 }
 
 #[derive(Debug)]
@@ -117,6 +123,7 @@ impl AppInhibitService {
             last_poll_ms: 0,
             last_count: None,
             force_emit: false,
+            seen: HashSet::with_capacity(16),
         }
     }
 
@@ -147,8 +154,12 @@ impl AppInhibitService {
         self.last_poll_ms = 0;
     }
 
-    /// Async-aware poll. Subprocess queries run via `spawn_blocking` so the
+    /// Async-aware poll. Subprocess/fs queries run via `spawn_blocking` so the
     /// tokio executor thread is never blocked.
+    ///
+    /// The `seen` scratch buffer is moved into the blocking task via `mem::take`
+    /// and returned alongside the count so its backing allocation survives across
+    /// polls — no HashSet is allocated on the steady-state hot path.
     pub async fn poll_async(&mut self, now_ms: u64) -> Option<Event> {
         if now_ms < self.last_poll_ms.saturating_add(self.poll_interval_ms) {
             return None;
@@ -158,30 +169,41 @@ impl AppInhibitService {
         let prev_count = self.last_count.unwrap_or(0);
 
         let count = if self.apps.is_empty() {
+            // Nothing to match — rinse the buffer so stale entries can't linger.
+            self.seen.clear();
             0
         } else {
+            // Take the scratch buffer out so we can move it into spawn_blocking.
+            // self.seen is left as HashSet::default() (empty, no allocation).
+            let mut scratch = mem::take(&mut self.seen);
+            scratch.clear();
+
             match &self.backend {
                 Backend::Hyprland(_) => {
                     let apps = self.apps.clone();
                     match tokio::task::spawn_blocking(move || {
-                        HyprlandBackend::default().count_matches_dedup(&apps)
+                        HyprlandBackend::count_into(&apps, &mut scratch)?;
+                        Ok::<_, String>((scratch.len() as u64, scratch))
                     })
                     .await
                     {
-                        Ok(Ok(n)) => n,
+                        Ok(Ok((n, returned))) => {
+                            self.seen = returned;
+                            n
+                        }
                         Ok(Err(e)) => {
                             eventline::warn!(
                                 "app_inhibit: hyprland query failed (keeping previous count={}): {}",
-                                prev_count,
-                                e
+                                prev_count, e
                             );
+                            // scratch was consumed by the closure; a fresh allocation
+                            // occurs on the next poll — acceptable for an error path.
                             prev_count
                         }
                         Err(e) => {
                             eventline::warn!(
                                 "app_inhibit: hyprland task panicked (keeping previous count={}): {}",
-                                prev_count,
-                                e
+                                prev_count, e
                             );
                             prev_count
                         }
@@ -191,24 +213,26 @@ impl AppInhibitService {
                 Backend::Niri(_) => {
                     let apps = self.apps.clone();
                     match tokio::task::spawn_blocking(move || {
-                        NiriBackend::default().count_matches_dedup(&apps)
+                        NiriBackend::count_into(&apps, &mut scratch)?;
+                        Ok::<_, String>((scratch.len() as u64, scratch))
                     })
                     .await
                     {
-                        Ok(Ok(n)) => n,
+                        Ok(Ok((n, returned))) => {
+                            self.seen = returned;
+                            n
+                        }
                         Ok(Err(e)) => {
                             eventline::warn!(
                                 "app_inhibit: niri query failed (keeping previous count={}): {}",
-                                prev_count,
-                                e
+                                prev_count, e
                             );
                             prev_count
                         }
                         Err(e) => {
                             eventline::warn!(
                                 "app_inhibit: niri task panicked (keeping previous count={}): {}",
-                                prev_count,
-                                e
+                                prev_count, e
                             );
                             prev_count
                         }
@@ -218,16 +242,19 @@ impl AppInhibitService {
                 Backend::Proc(_) => {
                     let apps = self.apps.clone();
                     match tokio::task::spawn_blocking(move || {
-                        ProcBackend::default().count_matches_dedup(&apps)
+                        ProcBackend::count_into(&apps, &mut scratch);
+                        (scratch.len() as u64, scratch)
                     })
                     .await
                     {
-                        Ok(n) => n,
+                        Ok((n, returned)) => {
+                            self.seen = returned;
+                            n
+                        }
                         Err(e) => {
                             eventline::warn!(
                                 "app_inhibit: proc task panicked (keeping previous count={}): {}",
-                                prev_count,
-                                e
+                                prev_count, e
                             );
                             prev_count
                         }
@@ -235,6 +262,13 @@ impl AppInhibitService {
                 }
             }
         };
+
+        // If the scratch buffer capacity ballooned (e.g. after a transient spike
+        // in open windows / processes) give back most of it to the allocator rather
+        // than keeping hundreds of empty slots alive indefinitely.
+        if self.seen.capacity() > 128 && self.seen.len() < 32 {
+            self.seen.shrink_to(32);
+        }
 
         let first_poll = self.last_count.is_none();
         let prev = self.last_count.unwrap_or(0);
@@ -310,8 +344,9 @@ fn detect_niri_backend() -> Option<Backend> {
     None
 }
 
-// ----------------------------- matching helpers -----------------------------
+// ----------------------------- matching helpers ------------------------------
 
+/// Returns `true` on the first matching pattern, short-circuiting the rest.
 fn should_inhibit_app_id(app_id: &str, patterns: &[Pattern]) -> bool {
     if app_id.is_empty() {
         return false;
@@ -319,10 +354,9 @@ fn should_inhibit_app_id(app_id: &str, patterns: &[Pattern]) -> bool {
 
     for pat in patterns {
         let matched = match pat {
-            Pattern::Literal(s) => app_id_matches_static(s, app_id),
+            Pattern::Literal(s) => app_id_matches_literal(s, app_id),
             Pattern::Regex(r) => r.is_match(app_id),
         };
-
         if matched {
             return true;
         }
@@ -331,16 +365,19 @@ fn should_inhibit_app_id(app_id: &str, patterns: &[Pattern]) -> bool {
     false
 }
 
-fn app_id_matches_static(pattern: &str, app_id: &str) -> bool {
+fn app_id_matches_literal(pattern: &str, app_id: &str) -> bool {
+    // Exact case-insensitive match.
     if pattern.eq_ignore_ascii_case(app_id) {
         return true;
     }
+    // "firefox.exe" vs pattern "firefox".
     if app_id.ends_with(".exe") {
         let name = app_id.strip_suffix(".exe").unwrap_or(app_id);
         if pattern.eq_ignore_ascii_case(name) {
             return true;
         }
     }
+    // Reverse dotted suffix: pattern "org.mozilla.firefox" vs app_id "firefox".
     if let Some(last) = pattern.split('.').last() {
         if last.eq_ignore_ascii_case(app_id) {
             return true;
@@ -349,10 +386,11 @@ fn app_id_matches_static(pattern: &str, app_id: &str) -> bool {
     false
 }
 
-// ----------------------------- Hyprland (hyprctl) -----------------------------
+// ----------------------------- Hyprland (hyprctl) ----------------------------
 
 impl HyprlandBackend {
-    fn count_matches_dedup(&self, apps: &[Pattern]) -> Result<u64, String> {
+    /// Populates `seen` with matched window classes. Caller must `clear()` first.
+    fn count_into(apps: &[Pattern], seen: &mut HashSet<String>) -> Result<(), String> {
         let out = std::process::Command::new("hyprctl")
             .args(["clients", "-j"])
             .output()
@@ -370,27 +408,25 @@ impl HyprlandBackend {
             .as_array()
             .ok_or_else(|| "hyprctl json: expected array".to_string())?;
 
-        let mut seen: HashSet<String> = HashSet::new();
-
         for item in arr {
             let class = item.get("class").and_then(|x| x.as_str()).unwrap_or("");
             if class.is_empty() {
                 continue;
             }
-
             if should_inhibit_app_id(class, apps) {
                 seen.insert(class.to_string());
             }
         }
 
-        Ok(seen.len() as u64)
+        Ok(())
     }
 }
 
-// ----------------------------- Niri (niri msg windows) -----------------------------
+// ----------------------------- Niri (niri msg windows) -----------------------
 
 impl NiriBackend {
-    fn count_matches_dedup(&self, apps: &[Pattern]) -> Result<u64, String> {
+    /// Populates `seen` with matched app IDs. Caller must `clear()` first.
+    fn count_into(apps: &[Pattern], seen: &mut HashSet<String>) -> Result<(), String> {
         let out = std::process::Command::new("niri")
             .args(["msg", "windows"])
             .output()
@@ -402,8 +438,6 @@ impl NiriBackend {
         }
 
         let text = String::from_utf8_lossy(&out.stdout);
-
-        let mut seen: HashSet<String> = HashSet::new();
 
         for line in text.lines() {
             let Some(rest) = line.strip_prefix("  App ID: ") else {
@@ -420,90 +454,105 @@ impl NiriBackend {
             }
         }
 
-        Ok(seen.len() as u64)
+        Ok(())
     }
 }
 
-// ----------------------------- /proc fallback -----------------------------
+// ----------------------------- /proc (procfs crate) --------------------------
 
 impl ProcBackend {
-    fn count_matches_dedup(&self, apps: &[Pattern]) -> u64 {
-        let Ok(rd) = std::fs::read_dir("/proc") else {
-            return 0;
+    /// Populates `seen` with matched process names via the `procfs` crate.
+    ///
+    /// The `procfs` crate reads `/proc` entries through a single `read_dir` pass
+    /// and parses only the fields we actually need (`stat.comm` and `exe`), which
+    /// avoids the overhead of manually re-implementing that logic and the full
+    /// process list copy that `sysinfo` kept alive.
+    ///
+    /// Early-exit: once every literal pattern has a hit in `seen` *and* there
+    /// are no regex patterns left to satisfy, further scanning cannot change the
+    /// count so we break out of the loop immediately.
+    fn count_into(apps: &[Pattern], seen: &mut HashSet<String>) {
+        let has_regex = apps.iter().any(|p| matches!(p, Pattern::Regex(_)));
+
+        // Pre-compute the exact keys that literal patterns produce so we can
+        // check saturation in O(n_literals) rather than O(n_seen).
+        let literal_keys: Vec<String> = apps
+            .iter()
+            .filter_map(|p| {
+                if let Pattern::Literal(s) = p {
+                    Some(s.to_lowercase())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        let all_processes = match procfs::process::all_processes() {
+            Ok(iter) => iter,
+            Err(e) => {
+                eventline::warn!("app_inhibit: procfs::all_processes failed: {e}");
+                return;
+            }
         };
 
-        let mut seen: HashSet<String> = HashSet::new();
+        for prc in all_processes.flatten() {
+            // Early-exit when all literal patterns are satisfied and there are no
+            // regex patterns that could add new unique keys.
+            if !has_regex && literal_keys.iter().all(|k| seen.contains(k.as_str())) {
+                break;
+            }
 
-        for ent in rd.flatten() {
-            let pid_str = ent.file_name().to_string_lossy().to_string();
-            if !pid_str.chars().all(|c| c.is_ascii_digit()) {
+            // Primary: `comm` — kernel-truncated to 15 chars but fast and
+            // sufficient for most app names.
+            let comm_matched = prc
+                .stat()
+                .ok()
+                .and_then(|s| Self::match_key(&s.comm, apps))
+                .map(|key| seen.insert(key))
+                .is_some();
+
+            if comm_matched {
                 continue;
             }
 
-            let pid_path = ent.path();
-
-            if let Some(comm) = read_proc_comm(&pid_path) {
-                if let Some(key) = proc_match_key(&comm, apps) {
-                    seen.insert(key);
-                    continue;
-                }
-            }
-
-            if let Some(cmd) = read_proc_cmdline(&pid_path) {
-                let argv0 = cmd.split_whitespace().next().unwrap_or("").to_string();
-                if !argv0.is_empty() {
-                    if let Some(key) = proc_match_key(&argv0, apps) {
+            // Fallback: exe basename — handles wrappers that rename comm or
+            // apps whose name is longer than 15 characters.
+            if let Ok(exe) = prc.exe() {
+                if let Some(name) = exe.file_name().and_then(|n| n.to_str()) {
+                    if let Some(key) = Self::match_key(name, apps) {
                         seen.insert(key);
-                        continue;
                     }
                 }
             }
         }
-
-        seen.len() as u64
     }
-}
 
-fn proc_match_key(hay: &str, apps: &[Pattern]) -> Option<String> {
-    for p in apps {
-        let matched = match p {
-            Pattern::Literal(s) => hay.eq_ignore_ascii_case(s),
-            Pattern::Regex(r) => r.is_match(hay),
-        };
-        if matched {
-            return Some(hay.to_lowercase());
+    #[inline]
+    fn match_key(hay: &str, apps: &[Pattern]) -> Option<String> {
+        for p in apps {
+            let matched = match p {
+                Pattern::Literal(s) => hay.eq_ignore_ascii_case(s),
+                Pattern::Regex(r) => r.is_match(hay),
+            };
+            if matched {
+                return Some(hay.to_lowercase());
+            }
         }
+        None
     }
-    None
 }
 
-fn read_proc_comm(pid_path: &Path) -> Option<String> {
-    let p = pid_path.join("comm");
-    let s = std::fs::read_to_string(p).ok()?;
-    Some(s.trim().to_string())
-}
+// ----------------------------- utils -----------------------------------------
 
-fn read_proc_cmdline(pid_path: &Path) -> Option<String> {
-    let p = pid_path.join("cmdline");
-    let bytes = std::fs::read(p).ok()?;
-    if bytes.is_empty() {
-        return None;
-    }
-
-    let s = bytes
-        .split(|b| *b == 0)
-        .filter(|part| !part.is_empty())
-        .map(|part| String::from_utf8_lossy(part).to_string())
-        .collect::<Vec<_>>()
-        .join(" ");
-
-    Some(s)
-}
-
-// ----------------------------- utils -----------------------------
-
+/// Deduplicate patterns by their string representation so duplicate rules from
+/// a config reload don't silently inflate match counts.
 fn normalize_patterns(inhibit_apps: &[Pattern]) -> Vec<Pattern> {
-    inhibit_apps.iter().cloned().collect()
+    let mut seen_strs: HashSet<String> = HashSet::with_capacity(inhibit_apps.len());
+    inhibit_apps
+        .iter()
+        .filter(|p| seen_strs.insert(p.to_string()))
+        .cloned()
+        .collect()
 }
 
 fn patterns_same(a: &[Pattern], b: &[Pattern]) -> bool {
