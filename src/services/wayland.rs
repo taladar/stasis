@@ -5,7 +5,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
-
+use std::os::fd::AsFd;
 use tokio::sync::{mpsc, watch};
 
 use wayland_client::{
@@ -218,16 +218,48 @@ impl Dispatch<ExtIdleNotificationV1, ()> for WaylandState {
     }
 }
 
+/// Poll the Wayland connection fd with a timeout (milliseconds).
+/// Returns true if data is available, false on timeout.
+fn poll_wayland_fd(fd: std::os::unix::io::RawFd, timeout_ms: i32) -> Result<bool, String> {
+    let mut pfd = libc::pollfd {
+        fd,
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    let ret = unsafe { libc::poll(&mut pfd as *mut libc::pollfd, 1, timeout_ms) };
+    match ret {
+        -1 => {
+            let err = std::io::Error::last_os_error();
+            if err.kind() == std::io::ErrorKind::Interrupted {
+                Ok(false)
+            } else {
+                Err(format!("poll failed: {err}"))
+            }
+        }
+        0 => Ok(false),
+        _ => Ok(true),
+    }
+}
+
 /// Spawnable Wayland service.
 ///
-/// - Connects to Wayland from env
-/// - Sets up ext_idle_notifier_v1 if available
-/// - Also binds wl_pointer/wl_keyboard from wl_seat for immediate activity events
-/// - Runs a blocking dispatch loop in a blocking task
-/// - Awaits the blocking task so the caller can observe completion and panics
+/// Now accepts `shutdown_tx` so that when the compositor disconnects for any
+/// reason, the daemon shuts down immediately. This is the correct behaviour:
+/// stasis is a per-session idle manager and has no useful work to do without
+/// a live compositor. The previous behaviour was to return `Ok(())` silently,
+/// leaving the daemon alive with no input source whatsoever. The ticker would
+/// then keep firing, `maybe_fire_next_step` would advance the plan uncontested,
+/// and when the user returned to a compositor there was nothing resetting the
+/// idle timer so input appeared to be ignored.
+///
+/// The dispatch loop uses poll(2) with a short timeout rather than
+/// `blocking_dispatch` so the stop flag is checked regularly, preventing the
+/// blocking thread from hanging on exit (which previously kept the process
+/// alive past its intended lifetime and blocked the instance lock socket).
 pub async fn run_wayland(
     tx: mpsc::Sender<ManagerMsg>,
     mut shutdown: watch::Receiver<bool>,
+    shutdown_tx: watch::Sender<bool>,
 ) -> Result<(), WaylandError> {
     let idle_timeout_ms: u32 = 250;
 
@@ -240,13 +272,11 @@ pub async fn run_wayland(
 
     let mut state = WaylandState::new(tx, idle_timeout_ms);
 
-    // Bind globals
     let _registry = display.get_registry(&qh, ());
     event_queue
         .roundtrip(&mut state)
         .map_err(|e| WaylandError::Roundtrip(e.to_string()))?;
 
-    // Enable idle notifications if supported
     if let (Some(notifier), Some(seat)) = (&state.idle_notifier, &state.seat) {
         let notification = notifier.get_idle_notification(state.idle_timeout_ms, seat, &qh, ());
         state.notification = Some(notification);
@@ -260,7 +290,6 @@ pub async fn run_wayland(
     let stop = Arc::new(AtomicBool::new(false));
     let stop_dispatch = Arc::clone(&stop);
 
-    // Shutdown watcher — sets the stop flag for the blocking loop.
     tokio::spawn(async move {
         loop {
             if *shutdown.borrow() {
@@ -274,26 +303,77 @@ pub async fn run_wayland(
         }
     });
 
-    // Run Wayland dispatch in a blocking task and AWAIT it so:
-    //   (a) panics inside the task surface as errors instead of being silently dropped, and
-    //   (b) the task handle isn't leaked when the compositor goes away mid-session.
+    let wayland_fd = {
+        use std::os::unix::io::AsRawFd;
+        conn.as_fd().as_raw_fd()
+    };
+
+    // Returns true if the compositor went away, false if we stopped cleanly.
     let join = tokio::task::spawn_blocking(move || {
-        while !stop_dispatch.load(Ordering::Relaxed) {
-            if let Err(e) = event_queue.blocking_dispatch(&mut state) {
-                // A dispatch error usually means the compositor disconnected.
-                // Log at error level and break cleanly; the outer service loop
-                // (in daemon/run.rs) is responsible for restarting if desired.
-                eventline::error!("wayland: dispatch error: {}", e);
+        const POLL_TIMEOUT_MS: i32 = 200;
+        let mut compositor_gone = false;
+
+        loop {
+            if stop_dispatch.load(Ordering::Relaxed) {
                 break;
+            }
+
+            if let Err(e) = event_queue.flush() {
+                eventline::error!("wayland: flush error: {}", e);
+                compositor_gone = true;
+                break;
+            }
+
+            match event_queue.prepare_read() {
+                Some(read_guard) => match poll_wayland_fd(wayland_fd, POLL_TIMEOUT_MS) {
+                    Ok(true) => {
+                        if let Err(e) = read_guard.read() {
+                            eventline::error!("wayland: read error: {}", e);
+                            compositor_gone = true;
+                            break;
+                        }
+                        if let Err(e) = event_queue.dispatch_pending(&mut state) {
+                            eventline::error!("wayland: dispatch error: {}", e);
+                            compositor_gone = true;
+                            break;
+                        }
+                    }
+                    Ok(false) => {
+                        drop(read_guard); // timeout, check stop flag
+                    }
+                    Err(e) => {
+                        eventline::error!("wayland: poll error: {}", e);
+                        compositor_gone = true;
+                        break;
+                    }
+                },
+                None => {
+                    // Events already queued; dispatch without reading.
+                    if let Err(e) = event_queue.dispatch_pending(&mut state) {
+                        eventline::error!("wayland: dispatch error: {}", e);
+                        compositor_gone = true;
+                        break;
+                    }
+                }
             }
         }
 
-        eventline::info!("wayland: stopping");
+        compositor_gone
     });
 
-    // Propagate join errors (panics) upward.
-    if let Err(e) = join.await {
+    let compositor_gone = join.await.unwrap_or_else(|e| {
         eventline::error!("wayland: blocking task panicked: {:?}", e);
+        true
+    });
+
+    if compositor_gone {
+        // Compositor is gone — shut the whole daemon down immediately.
+        // There is no point staying alive: no input source exists, the plan
+        // will run uncontested, and the user cannot interrupt it on return.
+        eventline::info!("wayland: compositor disconnected; shutting down");
+        let _ = shutdown_tx.send(true);
+    } else {
+        eventline::info!("wayland: stopping");
     }
 
     Ok(())

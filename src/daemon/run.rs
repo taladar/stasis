@@ -67,8 +67,9 @@ impl Daemon {
         tokio::spawn({
             let tx = tx.clone();
             let shutdown = shutdown.clone();
+            let shutdown_tx = shutdown_tx.clone();
             async move {
-                let _ = crate::services::wayland::run_wayland(tx, shutdown).await;
+                let _ = crate::services::wayland::run_wayland(tx, shutdown, shutdown_tx).await;
             }
         });
 

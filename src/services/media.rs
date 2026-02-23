@@ -515,20 +515,47 @@ fn is_remote_stream(
 }
 
 fn looks_like_system_audio(app_name: &str, app_bin: &str, node_name: &str, media_name: &str) -> bool {
-    let bin_lc = app_bin.to_ascii_lowercase();
+    let bin_lc  = app_bin.to_ascii_lowercase();
+    let app_lc  = app_name.to_ascii_lowercase();
+    let node_lc = node_name.to_ascii_lowercase();
+    let media_lc = media_name.to_ascii_lowercase();
 
+    // Speech dispatcher
     if bin_lc == "sd_generic" || bin_lc == "sd_dummy" || bin_lc.starts_with("sd_") {
         return true;
     }
-
-    let app_lc = app_name.to_ascii_lowercase();
-    let node_lc = node_name.to_ascii_lowercase();
-
     if app_lc.starts_with("speech-dispatcher-") || node_lc.starts_with("speech-dispatcher-") {
         return true;
     }
+    if app_lc == "speech-dispatcher" && media_lc == "playback" {
+        return true;
+    }
 
-    if app_lc == "speech-dispatcher" && media_name.to_ascii_lowercase() == "playback" {
+    // PipeWire / PulseAudio internal plumbing streams.
+    // These are infrastructure sinks, not user media — no one should need
+    // to add these to their personal blacklist.
+    const SYSTEM_NEEDLES: &[&str] = &[
+        "pwalarmd",              // PipeWire ALSA alarm daemon
+        "pipewire-alsa",         // generic PipeWire ALSA bridge
+        "pipewire-pulse",        // PipeWire PulseAudio compat layer
+        "pw-alsa",               // alternate PipeWire ALSA bridge name
+        "alsa_playback.pwalarm", // node.name variant of the above
+    ];
+    for needle in SYSTEM_NEEDLES {
+        if app_lc.contains(needle)
+            || bin_lc.contains(needle)
+            || node_lc.contains(needle)
+            || media_lc.contains(needle)
+        {
+            return true;
+        }
+    }
+
+    // "ALSA Playback" with no meaningful app identity is almost always
+    // internal infrastructure (e.g. pwalarmd, event-sound daemons).
+    if media_lc == "alsa playback"
+        && (app_lc.is_empty() || app_lc.starts_with("pipewire") || app_lc.contains("alsa"))
+    {
         return true;
     }
 

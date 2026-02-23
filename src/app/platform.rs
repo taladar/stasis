@@ -85,9 +85,7 @@ fn wayland_socket_path_probe() -> Result<PathBuf, String> {
 }
 
 pub fn ensure_wayland_alive() -> Result<(), String> {
-    // Ground truth: a connectable Wayland socket.
     let sock = wayland_socket_path_probe().map_err(|probe_err| {
-        // Only use XDG_SESSION_TYPE for diagnostics.
         let session_type =
             std::env::var("XDG_SESSION_TYPE").unwrap_or_else(|_| "<unset>".to_string());
 
@@ -107,54 +105,15 @@ fn wayland_socket_path() -> Result<PathBuf, String> {
     wayland_socket_path_probe()
 }
 
-// ---------------- session liveness (login1) ----------------
+// ---------------- session liveness ----------------
 //
-// Socket-connectable does NOT always mean “session still active”.
-// On VT switch or logout transitions, the compositor/socket may remain connectable.
-// We therefore additionally consult logind (org.freedesktop.login1.Session.Active).
+// Watches only the Wayland socket. When the compositor goes away the socket
+// becomes unconnectable and we shut down immediately (one failure = done).
 //
-// This does not rely on systemd; it relies on logind over D-Bus.
-
-async fn login1_session_active() -> Result<bool, String> {
-    use zbus::{Connection, Proxy};
-    use zbus::zvariant::OwnedObjectPath;
-
-    let sys = Connection::system()
-        .await
-        .map_err(|e| format!("logind: could not connect to system bus: {e}"))?;
-
-    let mgr = Proxy::new(
-        &sys,
-        "org.freedesktop.login1",
-        "/org/freedesktop/login1",
-        "org.freedesktop.login1.Manager",
-    )
-    .await
-    .map_err(|e| format!("logind: failed to create Manager proxy: {e}"))?;
-
-    // Use PID-based resolution; it works even when XDG_SESSION_TYPE/env isn't present.
-    let pid = std::process::id() as u32;
-    let (session_path,): (OwnedObjectPath,) = mgr
-        .call("GetSessionByPID", &(pid,))
-        .await
-        .map_err(|e| format!("logind: GetSessionByPID({pid}) failed: {e}"))?;
-
-    let sess = Proxy::new(
-        &sys,
-        "org.freedesktop.login1",
-        session_path.as_str(),
-        "org.freedesktop.login1.Session",
-    )
-    .await
-    .map_err(|e| format!("logind: failed to create Session proxy: {e}"))?;
-
-    let active: bool = sess
-        .get_property("Active")
-        .await
-        .map_err(|e| format!("logind: failed to read Session.Active: {e}"))?;
-
-    Ok(active)
-}
+// logind / login1 has been removed: it added latency (3 × 2 s = 6 s minimum)
+// and complexity with no benefit. The Wayland socket is the ground truth for
+// whether a compositor session is live; if it is gone, stasis has no input
+// source and must not continue running.
 
 pub fn spawn_wayland_socket_watcher(shutdown_tx: tokio::sync::watch::Sender<bool>) {
     let sock = match wayland_socket_path() {
@@ -166,9 +125,6 @@ pub fn spawn_wayland_socket_watcher(shutdown_tx: tokio::sync::watch::Sender<bool
     };
 
     tokio::spawn(async move {
-        let mut socket_failures: u32 = 0;
-        let mut inactive_failures: u32 = 0;
-
         loop {
             tokio::time::sleep(Duration::from_secs(2)).await;
 
@@ -176,41 +132,16 @@ pub fn spawn_wayland_socket_watcher(shutdown_tx: tokio::sync::watch::Sender<bool
                 break;
             }
 
-            // 1) Wayland socket liveness (compositor/socket really gone)
             if UnixStream::connect(&sock).is_err() {
-                socket_failures += 1;
-            } else {
-                socket_failures = 0;
-            }
-
-            if socket_failures >= 3 {
+                // Socket is gone — compositor is dead. Shut down immediately.
+                // Do not wait for multiple failures: every second we stay alive
+                // without a compositor is a second the ticker runs uncontested.
                 eventline::info!(
                     "wayland socket not connectable ({}); shutting down",
                     sock.display()
                 );
                 let _ = shutdown_tx.send(true);
                 break;
-            }
-
-            // 2) Session liveness (covers VT switch / session end while socket may linger)
-            match login1_session_active().await {
-                Ok(true) => {
-                    inactive_failures = 0;
-                }
-                Ok(false) => {
-                    inactive_failures += 1;
-                    if inactive_failures >= 3 {
-                        eventline::info!("logind session inactive; shutting down");
-                        let _ = shutdown_tx.send(true);
-                        break;
-                    }
-                }
-                Err(e) => {
-                    // If logind is unavailable/transiently failing, don't kill the app.
-                    // Socket-based shutdown remains the backstop.
-                    eventline::warn!("logind liveness probe failed: {e}");
-                    inactive_failures = 0;
-                }
             }
         }
     });
