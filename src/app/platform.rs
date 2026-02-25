@@ -13,46 +13,66 @@ pub fn default_log_path() -> Option<PathBuf> {
     Some(state_base.join("stasis").join("stasis.log"))
 }
 
-
 // ---------------- single-instance lock ----------------
+//
+// Key change: return io::Result so the caller can treat
+// io::ErrorKind::AlreadyExists as a clean exit and avoid
+// printing an extra wrapper ("Error: ...") on top of the message.
 
-fn runtime_dir() -> Result<PathBuf, String> {
+fn runtime_dir() -> io::Result<PathBuf> {
     std::env::var_os("XDG_RUNTIME_DIR")
         .map(PathBuf::from)
-        .ok_or_else(|| "XDG_RUNTIME_DIR is not set (cannot create instance lock)".to_string())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "XDG_RUNTIME_DIR is not set"))
 }
 
-fn lock_path() -> Result<PathBuf, String> {
+fn lock_path() -> io::Result<PathBuf> {
     Ok(runtime_dir()?.join("stasis").join("stasis.lock"))
 }
 
-pub fn acquire_single_instance_lock() -> Result<UnixListener, String> {
+pub fn acquire_single_instance_lock() -> io::Result<UnixListener> {
     let path = lock_path()?;
+
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
 
     match UnixListener::bind(&path) {
         Ok(l) => Ok(l),
-        Err(e) if e.kind() == io::ErrorKind::AddrInUse => match UnixStream::connect(&path) {
-            Ok(_) => Err(format!(
-                "stasis is already running (another instance holds {})",
-                path.display()
-            )),
-            Err(_) => {
-                let _ = std::fs::remove_file(&path);
-                UnixListener::bind(&path)
-                    .map_err(|e| format!("failed to bind instance lock {}: {e}", path.display()))
+
+        Err(e) if e.kind() == io::ErrorKind::AddrInUse => {
+            // If we can connect, another instance is alive.
+            if UnixStream::connect(&path).is_ok() {
+                return Err(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    format!(
+                        "stasis is already running (another instance holds {})",
+                        path.display()
+                    ),
+                ));
             }
-        },
-        Err(e) => Err(format!("failed to bind instance lock {}: {e}", path.display())),
+
+            // Otherwise it's probably stale; remove and retry once.
+            let _ = std::fs::remove_file(&path);
+            UnixListener::bind(&path).map_err(|e| {
+                io::Error::new(
+                    e.kind(),
+                    format!("failed to bind instance lock {}: {e}", path.display()),
+                )
+            })
+        }
+
+        Err(e) => Err(io::Error::new(
+            e.kind(),
+            format!("failed to bind instance lock {}: {e}", path.display()),
+        )),
     }
 }
 
 // ---------------- wayland check ----------------
 
 fn wayland_socket_path_probe() -> Result<PathBuf, String> {
-    let rt = runtime_dir()?;
+    let rt = runtime_dir()
+        .map_err(|e| format!("XDG_RUNTIME_DIR is not set (cannot probe wayland socket): {e}"))?;
 
     if let Ok(display) = std::env::var("WAYLAND_DISPLAY") {
         if !display.is_empty() {
