@@ -260,54 +260,78 @@ fn parse_until_local_time(s: &str) -> Result<Duration, String> {
         }
     }
 
-    // Compute next occurrence of that local time using libc (no chrono dependency).
-    unsafe {
-        use libc::{localtime_r, mktime, time_t, tm};
+    // Compute next occurrence of that local time using chrono (no libc).
+    use chrono::{Datelike, Local, LocalResult, NaiveDate, NaiveDateTime, TimeZone};
 
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_err(|_| "System time before UNIX_EPOCH".to_string())?;
-        let now_secs_u64 = now.as_secs();
+    let now = Local::now();
 
-        let now_tt: time_t = now_secs_u64 as time_t;
+    let today: NaiveDate = NaiveDate::from_ymd_opt(now.year(), now.month(), now.day())
+        .ok_or_else(|| "Failed to read local date".to_string())?;
 
-        let mut now_tm: tm = std::mem::zeroed();
-        if localtime_r(&now_tt as *const time_t, &mut now_tm as *mut tm).is_null() {
-            return Err("Failed to read local time".into());
+    let target_naive_today: NaiveDateTime = today
+        .and_hms_opt(hour as u32, min as u32, 0)
+        .ok_or_else(|| "Invalid time".to_string())?;
+
+    fn resolve_local(dt: NaiveDateTime) -> Option<chrono::DateTime<Local>> {
+        match Local.from_local_datetime(&dt) {
+            LocalResult::Single(x) => Some(x),
+            LocalResult::Ambiguous(a, b) => {
+                // Pick the earlier instant (matches typical “next occurrence” expectation).
+                Some(std::cmp::min(a, b))
+            }
+            LocalResult::None => None, // Nonexistent due to DST jump.
         }
+    }
 
-        // Build a tm for "today at target HH:MM:00"
-        let mut target_tm = now_tm;
-        target_tm.tm_hour = hour;
-        target_tm.tm_min = min;
-        target_tm.tm_sec = 0;
-        target_tm.tm_isdst = -1; // let libc determine DST
-
-        let mut target_tt = mktime(&mut target_tm as *mut tm);
-        if target_tt == -1 {
-            return Err("Invalid time (mktime failed)".into());
+    // Try today; if nonexistent due to DST, search forward up to 2 hours to find a valid local time.
+    let mut target = resolve_local(target_naive_today);
+    if target.is_none() {
+        for add_min in 1..=120 {
+            let dt = target_naive_today + chrono::Duration::minutes(add_min);
+            if let Some(x) = resolve_local(dt) {
+                target = Some(x);
+                break;
+            }
         }
+        if target.is_none() {
+            return Err("Invalid time (local time does not exist)".into());
+        }
+    }
 
-        // If target <= now, schedule for tomorrow.
-        if (target_tt as i64) <= (now_tt as i64) {
-            let mut tomorrow_tm = now_tm;
-            tomorrow_tm.tm_mday += 1;
-            tomorrow_tm.tm_hour = hour;
-            tomorrow_tm.tm_min = min;
-            tomorrow_tm.tm_sec = 0;
-            tomorrow_tm.tm_isdst = -1;
+    let mut target = target.ok_or_else(|| "Invalid time".to_string())?;
 
-            target_tt = mktime(&mut tomorrow_tm as *mut tm);
-            if target_tt == -1 {
-                return Err("Invalid time (mktime failed)".into());
+    // If target <= now, schedule for tomorrow (same wall-clock time).
+    if target <= now {
+        let tomorrow = today
+            .succ_opt()
+            .ok_or_else(|| "Failed to compute tomorrow".to_string())?;
+        let target_naive_tomorrow = tomorrow
+            .and_hms_opt(hour as u32, min as u32, 0)
+            .ok_or_else(|| "Invalid time".to_string())?;
+
+        let mut target2 = resolve_local(target_naive_tomorrow);
+        if target2.is_none() {
+            for add_min in 1..=120 {
+                let dt = target_naive_tomorrow + chrono::Duration::minutes(add_min);
+                if let Some(x) = resolve_local(dt) {
+                    target2 = Some(x);
+                    break;
+                }
             }
         }
 
-        let delta_secs = (target_tt as i64) - (now_tt as i64);
-        if delta_secs <= 0 {
-            return Ok(Duration::from_millis(0));
-        }
-
-        Ok(Duration::from_secs(delta_secs as u64))
+        target = target2.ok_or_else(|| "Invalid time (local time does not exist)".to_string())?;
     }
+
+    let delta = target.signed_duration_since(now);
+    if delta.num_milliseconds() <= 0 {
+        return Ok(Duration::from_millis(0));
+    }
+
+    Ok(Duration::from_millis(
+        delta
+            .num_milliseconds()
+            .try_into()
+            .map_err(|_| "Duration too large".to_string())?,
+    ))
 }

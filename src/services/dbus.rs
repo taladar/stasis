@@ -243,7 +243,7 @@ async fn get_current_session_path(
     }
 
     // 2) Search ListSessions for our UID, prefer graphical seat0
-    let uid = unsafe { libc::getuid() };
+    let uid: u32 = rustix::process::getuid().as_raw();
 
     let sessions: Vec<(String, u32, String, String, zbus::zvariant::OwnedObjectPath)> =
         proxy.call("ListSessions", &()).await?;

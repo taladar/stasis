@@ -5,7 +5,8 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
-use std::os::fd::AsFd;
+use std::os::fd::{AsFd, BorrowedFd};
+use std::time::Duration;
 use tokio::sync::{mpsc, watch};
 
 use wayland_client::{
@@ -221,23 +222,28 @@ impl Dispatch<ExtIdleNotificationV1, ()> for WaylandState {
 /// Poll the Wayland connection fd with a timeout (milliseconds).
 /// Returns true if data is available, false on timeout.
 fn poll_wayland_fd(fd: std::os::unix::io::RawFd, timeout_ms: i32) -> Result<bool, String> {
-    let mut pfd = libc::pollfd {
-        fd,
-        events: libc::POLLIN,
-        revents: 0,
+    use rustix::event::{poll, PollFd, PollFlags, Timespec};
+    use rustix::io::Errno;
+
+    // Match poll(2) semantics: negative timeout means "infinite".
+    let timeout_ts: Option<Timespec> = if timeout_ms < 0 {
+        None
+    } else {
+        Some(
+            Timespec::try_from(Duration::from_millis(timeout_ms as u64))
+                .map_err(|_| "poll failed: invalid timeout".to_string())?,
+        )
     };
-    let ret = unsafe { libc::poll(&mut pfd as *mut libc::pollfd, 1, timeout_ms) };
-    match ret {
-        -1 => {
-            let err = std::io::Error::last_os_error();
-            if err.kind() == std::io::ErrorKind::Interrupted {
-                Ok(false)
-            } else {
-                Err(format!("poll failed: {err}"))
-            }
-        }
-        0 => Ok(false),
-        _ => Ok(true),
+
+    // SAFETY: We only use this borrowed fd for the duration of this call.
+    let bfd = unsafe { BorrowedFd::borrow_raw(fd) };
+    let mut fds = [PollFd::from_borrowed_fd(bfd, PollFlags::IN)];
+
+    match poll(&mut fds, timeout_ts.as_ref()) {
+        Ok(0) => Ok(false),
+        Ok(_) => Ok(true),
+        Err(Errno::INTR) => Ok(false),
+        Err(e) => Err(format!("poll failed: {e}")),
     }
 }
 
