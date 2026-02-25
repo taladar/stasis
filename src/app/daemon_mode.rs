@@ -5,7 +5,6 @@ use crate::daemon::Daemon;
 use eventline::journal::rotation::LogPolicy;
 use eventline::runtime::enable_file_output_rotating;
 use eventline::runtime::run_header::RunHeader;
-use std::io;
 use std::path::PathBuf;
 
 use crate::cli::Args;
