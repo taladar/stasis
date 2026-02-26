@@ -2,9 +2,8 @@
 // License: MIT
 
 use crate::daemon::Daemon;
+use eventline::{FileSetup, RunHeader, Setup};
 use eventline::journal::rotation::LogPolicy;
-use eventline::runtime::enable_file_output_rotating;
-use eventline::runtime::run_header::RunHeader;
 use std::path::PathBuf;
 
 use crate::cli::Args;
@@ -12,16 +11,32 @@ use crate::cli::Args;
 type AnyError = Box<dyn std::error::Error + Send + Sync>;
 
 pub async fn run(args: Args) -> Result<(), AnyError> {
-    // eventline (init early so warn logs are consistent)
-    eventline::runtime::init().await;
+    let file = crate::app::platform::default_log_path().map(|path| {
+        let header = RunHeader::new("stasis daemon run start");
+        let policy = LogPolicy::default();
+
+        FileSetup::Rotating {
+            path,
+            policy,
+            header: Some(header),
+        }
+    });
+
+    if let Err(e) = eventline::setup(Setup {
+        verbose: args.verbose,
+        level: None,
+        file,
+    })
+    .await
+    {
+        // Keep running even if logging can't be configured.
+        // If console is disabled (non-verbose), this will likely be silent,
+        // which is acceptable for "logging is best-effort".
+        eprintln!("[eventline] failed to configure logging: {e}");
+    }
 
     if args.verbose {
-        eventline::runtime::enable_console_output(true);
-        eventline::runtime::set_log_level(eventline::runtime::LogLevel::Debug);
         eventline::debug!("debug logging enabled");
-    } else {
-        eventline::runtime::enable_console_output(false);
-        eventline::runtime::set_log_level(eventline::runtime::LogLevel::Info);
     }
 
     // ------------------------------
@@ -57,18 +72,6 @@ pub async fn run(args: Args) -> Result<(), AnyError> {
         }
 
         return Ok(()); // clean exit
-    }
-
-    // file logging
-    if let Some(path) = crate::app::platform::default_log_path() {
-        let header = RunHeader::new("stasis daemon run start");
-        let policy = LogPolicy::default();
-
-        if let Err(e) = enable_file_output_rotating(&path, policy, Some(header)) {
-            eventline::error!("failed to enable file logging: {}", e);
-        } else {
-            eventline::info!("file logging enabled: {}", path.display());
-        }
     }
 
     eventline::info!("stasis starting");
