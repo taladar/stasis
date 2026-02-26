@@ -41,8 +41,13 @@ pub async fn handle_list(args: &str, tx: &mpsc::Sender<ManagerMsg>) -> String {
     }
 
     match reply_rx.await {
-        Ok(Ok(s)) => s,
-        Ok(Err(e)) => format!("ERROR: {e}"),
-        Err(_) => "ERROR: daemon list channel closed".to_string(),
+        Ok(Ok(mut s)) => {
+            if !s.ends_with('\n') {
+                s.push('\n');
+            }
+            s
+        }
+        Ok(Err(e)) => format!("ERROR: {e}\n"),
+        Err(_) => "ERROR: daemon list channel closed\n".to_string(),
     }
 }
