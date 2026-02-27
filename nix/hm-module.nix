@@ -16,13 +16,13 @@ let
 
   cfg = config.services.stasis;
 
-  # These are *packages* (derivations). Home Manager will build PATH from them.
-  # This avoids the /bin/bin issue entirely because we never hand systemd literal
-  # directories that already include "/bin".
-  servicePathPkgs = with pkgs; [
+  # Base packages available in the service PATH.
+  # Include pulseaudio so `pactl` works under PipeWire Pulse.
+  baseServicePathPkgs = with pkgs; [
     bashInteractive
     coreutils
     systemd
+    pulseaudio
   ];
 in
 {
@@ -55,7 +55,7 @@ in
 
     target = mkOption {
       type = types.nonEmptyStr;
-      default = config.wayland.systemd.target;
+      default = config.wayland.systemd.target or "graphical-session.target";
       description = "The systemd user target after which Stasis is started.";
     };
 
@@ -72,6 +72,16 @@ in
         Optional environment file read by the Stasis systemd user service.
         Useful for compositor-specific variables like NIRI_SOCKET.
         Set to null to disable.
+      '';
+    };
+
+    extraPathPackages = mkOption {
+      type = types.listOf types.package;
+      default = [ ];
+      example = literalExpression ''with pkgs; [ playerctl ]'';
+      description = ''
+        Extra packages added to the Stasis systemd user service PATH.
+        (`pulseaudio` is included by default so `pactl` is available.)
       '';
     };
   };
@@ -93,7 +103,6 @@ in
           Restart = "on-failure";
           Slice = "session.slice";
 
-          # Pass through common session vars (compositor may set these).
           PassEnvironment = [
             "NIRI_SOCKET"
             "WAYLAND_DISPLAY"
@@ -106,8 +115,8 @@ in
         })
       ];
 
-      # HM/systemd "path" expects packages, and constructs PATH safely.
-      path = servicePathPkgs;
+      # systemd will safely construct PATH from derivations.
+      path = baseServicePathPkgs ++ cfg.extraPathPackages;
 
       Install = {
         WantedBy = [ cfg.target ];

@@ -1,5 +1,6 @@
 { package }:
 { config, lib, pkgs, ... }:
+
 let
   inherit (lib)
     mkEnableOption
@@ -12,8 +13,8 @@ let
     escapeShellArgs
     optionals
     literalExpression
-    makeBinPath
     ;
+
   cfg = config.services.stasis;
 
   defaultArgs = optionals (cfg.extraConfig != null) [
@@ -21,16 +22,14 @@ let
     "/etc/stasis/stasis.rune"
   ];
 
-  servicePathPkgs = with pkgs; [
+  # Packages added to the service PATH (systemd.user.services.<name>.path expects packages).
+  # Include pulseaudio so `pactl` is available for media detection on PipeWire Pulse setups.
+  baseServicePathPkgs = with pkgs; [
     bashInteractive
     coreutils
     systemd
+    pulseaudio
   ];
-  explicitPath =
-    "/run/current-system/sw/bin"
-    + ":/etc/profiles/per-user/%u/bin"
-    + ":/nix/var/nix/profiles/default/bin"
-    + ":${makeBinPath servicePathPkgs}";
 in
 {
   options = {
@@ -91,6 +90,17 @@ in
           Set to null to disable.
         '';
       };
+
+      # Optional: let users extend PATH without forking the module.
+      extraPathPackages = mkOption {
+        type = types.listOf types.package;
+        default = [ ];
+        example = literalExpression ''with pkgs; [ playerctl ]'';
+        description = ''
+          Extra packages added to the Stasis systemd user service PATH.
+          (The module already includes `pulseaudio` so `pactl` is available.)
+        '';
+      };
     };
   };
 
@@ -103,30 +113,22 @@ in
       partOf = [ cfg.target ];
       wantedBy = [ cfg.target ];
 
-      # path expects derivations, not literal paths — systemd will append /bin.
-      # We also set PATH explicitly in serviceConfig.Environment below so that
-      # the ordering is deterministic and system profile bins come first.
-      path = servicePathPkgs;
+      # systemd will construct PATH from these package derivations safely.
+      path = baseServicePathPkgs ++ cfg.extraPathPackages;
 
       serviceConfig = mkMerge [
         {
           Type = "simple";
           ExecStart = "${getExe cfg.package} ${escapeShellArgs cfg.extraArgs}";
           Restart = "on-failure";
-          # Explicit PATH; keeps environment predictable regardless of the
-          # user's profile state at service start time.
-          Environment = [
-            "PATH=${explicitPath}"
-          ];
+
           PassEnvironment = [
             "NIRI_SOCKET"
             "WAYLAND_DISPLAY"
             "XDG_RUNTIME_DIR"
+            "DBUS_SESSION_BUS_ADDRESS"
           ];
         }
-        # mkMerge (not //) is required: // is a plain Nix attribute merge and
-        # does not understand mkIf. When environmentFile is null, mkIf returns
-        # a special lib sentinel rather than {}, which breaks the merge.
         (mkIf (cfg.environmentFile != null) {
           EnvironmentFile = [ "-${cfg.environmentFile}" ];
         })
