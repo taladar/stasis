@@ -1,6 +1,7 @@
 <p align="center">
   <img src="assets/stasis.png" alt="Stasis Logo" width="200"/>
 </p>
+
 > [!WARNING]
 >
 > **Rewrite Notice (Non-Breaking for Most Users)**
