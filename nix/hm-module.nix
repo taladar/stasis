@@ -1,5 +1,6 @@
 { package }:
 { config, lib, pkgs, ... }:
+
 let
   inherit (lib)
     mkIf
@@ -11,22 +12,18 @@ let
     escapeShellArgs
     getExe
     literalExpression
-    makeBinPath
     ;
+
   cfg = config.services.stasis;
 
-  # Build an explicit PATH string so we never hit the /bin/bin double-suffix
-  # bug that occurs when systemd appends /bin to entries already containing it.
+  # These are *packages* (derivations). Home Manager will build PATH from them.
+  # This avoids the /bin/bin issue entirely because we never hand systemd literal
+  # directories that already include "/bin".
   servicePathPkgs = with pkgs; [
     bashInteractive
     coreutils
     systemd
   ];
-  explicitPath =
-    "/run/current-system/sw/bin"
-    + ":/etc/profiles/per-user/%u/bin"
-    + ":/nix/var/nix/profiles/default/bin"
-    + ":${makeBinPath servicePathPkgs}";
 in
 {
   options.services.stasis = {
@@ -95,11 +92,8 @@ in
           ExecStart = "${getExe cfg.package} ${escapeShellArgs cfg.extraArgs}";
           Restart = "on-failure";
           Slice = "session.slice";
-          # Explicit PATH avoids systemd's /bin suffix being appended to paths
-          # that already contain /bin, and keeps the environment deterministic.
-          Environment = [
-            "PATH=${explicitPath}"
-          ];
+
+          # Pass through common session vars (compositor may set these).
           PassEnvironment = [
             "NIRI_SOCKET"
             "WAYLAND_DISPLAY"
@@ -107,13 +101,13 @@ in
             "DBUS_SESSION_BUS_ADDRESS"
           ];
         }
-        # mkMerge (not //) is required here: // is a plain Nix attribute merge
-        # and does not understand mkIf — when environmentFile is null, mkIf
-        # returns a special lib value rather than {}, breaking the merge.
         (mkIf (cfg.environmentFile != null) {
           EnvironmentFile = [ "-${cfg.environmentFile}" ];
         })
       ];
+
+      # HM/systemd "path" expects packages, and constructs PATH safely.
+      path = servicePathPkgs;
 
       Install = {
         WantedBy = [ cfg.target ];
