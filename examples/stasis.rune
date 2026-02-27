@@ -38,7 +38,7 @@ default:
   #   lid_open_action  "brightnessctl set 60%"
   #
   lid_close_action "hyprlock"
-  #lid_open_action ""
+  #lid_open_action "hyprctl dispatch dpms on"
 
   # When resuming from IPC pause timers (e.g. `stasis pause 1h`)
   notify_on_unpause true
