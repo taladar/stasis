@@ -2,22 +2,6 @@
   <img src="assets/stasis.png" alt="Stasis Logo" width="200"/>
 </p>
 
-> [!WARNING]
->
-> **Rewrite Notice (Non-Breaking for Most Users)**
->
-> Stasis has undergone a **full internal rewrite** and now operates as a **fully event-driven idle manager**.
->
-> - 🧠 **No more internal polling loops** — all behavior is driven by explicit events and state transitions
-> - 🔄 **Configuration changes are minimal**
->   - A **built-in config converter** automatically migrates existing configs to the final format
-> - 🎵 **`media-bridge` is no longer used**
->   - It can be safely removed from your system
->   - New installs will **no longer install or depend on media-bridge**
->
-> While this is a major internal change, **most users should not experience breaking behavior**.
-> Please report any issues — especially around edge-case configurations — as the new engine settles.
-
 <h1 align="center">Stasis</h1>
 
 <p align="center">
