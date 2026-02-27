@@ -180,8 +180,9 @@ impl MediaService {
 
             force_emit: false,
 
-            local_scratch: HashSet::with_capacity(8),
-            remote_scratch: HashSet::with_capacity(4),
+            // Start small; shrink logic keeps them tight at steady state.
+            local_scratch: HashSet::with_capacity(4),
+            remote_scratch: HashSet::with_capacity(2),
         }
     }
 
@@ -236,12 +237,13 @@ impl MediaService {
         let local_count = local.len() as u64;
         let remote_count = remote.len() as u64;
 
-        // Shrink if they ballooned unexpectedly.
-        if local.capacity() > 64 && local.len() < 8 {
-            local.shrink_to(8);
+        // Aggressively shrink if the sets ballooned (e.g. briefly many sink
+        // inputs open). We only ever need a handful of slots for media tracking.
+        if local.capacity() > 16 && local.len() < 4 {
+            local.shrink_to(4);
         }
-        if remote.capacity() > 32 && remote.len() < 4 {
-            remote.shrink_to(4);
+        if remote.capacity() > 8 && remote.len() < 2 {
+            remote.shrink_to(2);
         }
 
         self.local_scratch = local;
@@ -347,6 +349,9 @@ fn parse_pactl_sink_inputs(
     let mut seen_corked = false;
     let mut corked = true;
 
+    // These String fields are reused across all blocks in one parse pass.
+    // We cap their backing capacity after each block to avoid one unusually
+    // long value (e.g. a long media.name) permanently inflating the buffer.
     let mut app_name = String::new();
     let mut app_bin = String::new();
     let mut node_name = String::new();
@@ -404,12 +409,17 @@ fn parse_pactl_sink_inputs(
             seen_corked = false;
             corked = true;
 
-            app_name.clear();
-            app_bin.clear();
-            node_name.clear();
-            media_name.clear();
-            sink_str.clear();
-            proc_id.clear();
+            // Clear and shrink field buffers after every block so that a
+            // one-off long value (e.g. a 200-char media.name) doesn't keep
+            // that allocation alive for the rest of the daemon's lifetime.
+            // shrink_to is a no-op when capacity is already at or below the limit.
+            app_name.clear();   app_name.shrink_to(64);
+            app_bin.clear();    app_bin.shrink_to(64);
+            node_name.clear();  node_name.shrink_to(64);
+            media_name.clear(); media_name.shrink_to(128);
+            sink_str.clear();   sink_str.shrink_to(64);
+            proc_id.clear();    proc_id.shrink_to(16);
+
             continue;
         }
 

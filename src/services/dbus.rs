@@ -1,14 +1,11 @@
 // Author: Dustin Pilgrim
 // License: MIT
 
-use std::{
-    collections::HashMap,
-    sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use futures::StreamExt;
-use tokio::runtime::Runtime;
 use tokio::sync::watch;
 use zbus::{Connection, MatchRule, Proxy};
 
@@ -27,13 +24,22 @@ pub trait EventSink: Send + Sync + 'static {
 /// - Lock/Unlock (org.freedesktop.login1.Session)
 ///
 /// Lid events via UPower are always monitored.
+///
+/// Uses a `current_thread` runtime rather than the default multi-thread one.
+/// D-Bus listening is purely I/O-bound with no CPU parallelism needed; the
+/// full multi-thread runtime was spending ~1–2 MB on worker-thread stacks and
+/// work-stealing queues that were never used.
 pub fn spawn_dbus_listeners(
     sink: Arc<dyn EventSink>,
     enable_loginctl: bool,
     shutdown: watch::Receiver<bool>,
 ) -> std::io::Result<std::thread::JoinHandle<()>> {
     Ok(std::thread::spawn(move || {
-        let rt = Runtime::new().expect("tokio runtime");
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tokio current_thread runtime");
+
         rt.block_on(async move {
             if let Err(e) = run_dbus(sink, enable_loginctl, shutdown).await {
                 eventline::error!("D-Bus listener failed: {e:?}");

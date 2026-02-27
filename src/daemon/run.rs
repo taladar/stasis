@@ -9,10 +9,36 @@ use crate::core::{
 use tokio::sync::{mpsc, watch};
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::services::dbus::EventSink;
 
 use super::{AnyError, Daemon, MpscEventSink};
+
+// `unsafe extern` is required as of Rust edition 2024.
+// Declared at module level so the linker resolves it at compile time.
+#[cfg(target_os = "linux")]
+unsafe extern "C" {
+    fn malloc_trim(pad: usize) -> i32;
+}
+
+/// Periodically calls malloc_trim(0) to return fragmented heap pages back to
+/// the OS. Without this, RSS creeps upward as the allocator holds on to freed
+/// pages across poll cycles. Runs once per minute — effectively free.
+#[cfg(target_os = "linux")]
+fn spawn_heap_trimmer() {
+    tokio::spawn(async {
+        loop {
+            tokio::time::sleep(Duration::from_secs(60)).await;
+            // SAFETY: malloc_trim is a glibc extension that returns freed pages
+            // to the OS. No preconditions beyond being on a glibc Linux system.
+            unsafe { malloc_trim(0) };
+        }
+    });
+}
+
+#[cfg(not(target_os = "linux"))]
+fn spawn_heap_trimmer() {}
 
 impl Daemon {
     pub async fn run(
@@ -22,7 +48,9 @@ impl Daemon {
     ) -> Result<(), AnyError> {
         eventline::info!("daemon starting");
 
-        let (tx, mut rx) = mpsc::channel::<ManagerMsg>(256);
+        // 32 is ample for an idle manager. Stasis events arrive slowly
+        // (ticks, input edges, D-Bus signals) — 256 was wasted reservation.
+        let (tx, mut rx) = mpsc::channel::<ManagerMsg>(32);
 
         if let Err(e) = crate::ipc::server::spawn_ipc_server(tx.clone()).await {
             eventline::warn!("ipc: failed to start: {}", e);
@@ -72,6 +100,9 @@ impl Daemon {
                 let _ = crate::services::wayland::run_wayland(tx, shutdown, shutdown_tx).await;
             }
         });
+
+        // Return fragmented heap pages to the OS once a minute.
+        spawn_heap_trimmer();
 
         self.push_inhibit_rules_from_effective(&tx);
 

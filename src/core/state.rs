@@ -228,7 +228,7 @@ impl State {
         self.last_lock_fired_idx = None;
     }
 
-    /// Clear fired flags from a point onward (post-lock “segment restart”).
+    /// Clear fired flags from a point onward (post-lock "segment restart").
     pub fn clear_fired_steps_from(&mut self, start_idx: usize) {
         if start_idx >= self.fired_steps.len() {
             return;
@@ -269,6 +269,10 @@ impl State {
 
     pub fn clear_one_shots(&mut self) {
         self.one_shots_fired.clear();
+        // Return the backing allocation to the OS. clear() keeps capacity, so
+        // without this a startup burst of instant steps would hold the allocation
+        // indefinitely across profile/power transitions that call clear_one_shots.
+        self.one_shots_fired.shrink_to(0);
     }
 
     // ---------------- pause timestamp helpers ----------------

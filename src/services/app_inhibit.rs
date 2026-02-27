@@ -123,7 +123,8 @@ impl AppInhibitService {
             last_poll_ms: 0,
             last_count: None,
             force_emit: false,
-            seen: HashSet::with_capacity(16),
+            // Start small; the shrink logic below keeps it tight at steady state.
+            seen: HashSet::with_capacity(8),
         }
     }
 
@@ -196,8 +197,6 @@ impl AppInhibitService {
                                 "app_inhibit: hyprland query failed (keeping previous count={}): {}",
                                 prev_count, e
                             );
-                            // scratch was consumed by the closure; a fresh allocation
-                            // occurs on the next poll — acceptable for an error path.
                             prev_count
                         }
                         Err(e) => {
@@ -263,11 +262,11 @@ impl AppInhibitService {
             }
         };
 
-        // If the scratch buffer capacity ballooned (e.g. after a transient spike
-        // in open windows / processes) give back most of it to the allocator rather
-        // than keeping hundreds of empty slots alive indefinitely.
-        if self.seen.capacity() > 128 && self.seen.len() < 32 {
-            self.seen.shrink_to(32);
+        // Aggressively shrink the scratch buffer if it ballooned beyond what we
+        // realistically need. An idle manager typically matches 0–5 apps at once;
+        // keeping 32+ empty slots alive wastes RSS indefinitely.
+        if self.seen.capacity() > 32 && self.seen.len() < 8 {
+            self.seen.shrink_to(8);
         }
 
         let first_poll = self.last_count.is_none();
