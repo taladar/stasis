@@ -1,11 +1,6 @@
 <p align="center">
   <img src="assets/stasis.png" alt="Stasis Logo" width="200"/>
 </p>
-
-> [!NOTE]
-> I no longer use Arch Linux and can’t actively maintain this package.
-> If you’d like to take over `stasis` and `stasis-git`, please let me know and I’ll transfer ownership.
-
 > [!WARNING]
 >
 > **Rewrite Notice (Non-Breaking for Most Users)**
