@@ -1,6 +1,5 @@
 <p align="center">
-  <!-- New icon coming soon -->
-  <!-- <img src="assets/stasis.png" alt="Stasis Logo" width="200"/> -->
+  <img src="assets/stasis.png" alt="Stasis Logo" width="200"/>
 </p>
 
 > [!NOTE]
