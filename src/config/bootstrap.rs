@@ -61,8 +61,23 @@ default:
   # it does not actually run your locker command.
   #enable_loginctl true
 
-  # Optional: run before suspending (e.g., ensure lock is up)
-  #pre_suspend_command "swaylock"
+  # Optional: run before suspending (hook).
+  #
+  # IMPORTANT:
+  # - This command runs RIGHT BEFORE the suspend step, and Stasis currently WAITS
+  #   for it to exit before continuing to suspend.
+  # - Therefore, a foreground screen locker (e.g. `swaylock -F`, `hyprlock`) will
+  #   BLOCK suspend unless it daemonizes / returns quickly.
+  # - Also: do NOT run your locker BOTH here and in `lock_screen.command`.
+  #   If you already have a lock step, leave `pre_suspend_command` unset.
+  #
+  # Good uses:
+  #   pre_suspend_command "sync"
+  #   pre_suspend_command "~/.local/bin/my-pre-sleep-hook"
+  #
+  # If you do NOT have a lock step and you want "lock right before suspend",
+  # use a locker that exits immediately (daemon/background), e.g. via a wrapper script.
+  #pre_suspend_command "sync"
 
   monitor_media true
   ignore_remote_media true # ignore remote players (spotify/kdeconnect/etc.)
