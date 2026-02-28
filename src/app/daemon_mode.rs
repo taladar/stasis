@@ -113,7 +113,7 @@ pub async fn run(args: Args) -> Result<(), AnyError> {
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     crate::app::platform::spawn_wayland_socket_watcher(shutdown_tx.clone());
 
-    let mut daemon = Daemon::new(cfg_file.cfg, config_path);
+    let mut daemon = Daemon::new(cfg_file.cfg, config_path, args.verbose);
 
     let mut daemon_task = tokio::spawn({
         let shutdown_tx = shutdown_tx.clone();

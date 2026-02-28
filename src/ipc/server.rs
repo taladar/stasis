@@ -50,18 +50,16 @@ pub async fn spawn_ipc_server(tx: mpsc::Sender<ManagerMsg>) -> Result<(), String
                     return;
                 }
 
-                eventline::scope!("ipc", {
-                    eventline::debug!("command: {}", cmd);
+                eventline::debug!("ipc: command: {}", cmd);
 
-                    let response = crate::ipc::router::route_command(&cmd, &tx).await;
+                let response = crate::ipc::router::route_command(&cmd, &tx).await;
 
-                    if let Err(e) = stream.write_all(response.as_bytes()).await {
-                        eventline::warn!("ipc: write failed: {}", e);
-                        return;
-                    }
+                if let Err(e) = stream.write_all(response.as_bytes()).await {
+                    eventline::warn!("ipc: write failed: {}", e);
+                    return;
+                }
 
-                    let _ = stream.shutdown().await;
-                });
+                let _ = stream.shutdown().await;
             });
         }
     });

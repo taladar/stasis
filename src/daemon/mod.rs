@@ -48,10 +48,12 @@ pub struct Daemon {
 
     chassis: crate::core::utils::ChassisKind,
     bad_profile_logged: bool,
+
+    verbose: bool,
 }
 
 impl Daemon {
-    pub fn new(mut cfg_file: ConfigFile, config_path: PathBuf) -> Self {
+    pub fn new(mut cfg_file: ConfigFile, config_path: PathBuf, verbose: bool) -> Self {
         let now_ms = crate::core::utils::now_ms();
         let chassis = crate::core::utils::detect_chassis();
 
@@ -133,6 +135,7 @@ impl Daemon {
             enable_loginctl,
             chassis,
             bad_profile_logged: false,
+            verbose,
         }
     }
 
@@ -163,6 +166,17 @@ impl Daemon {
 
     fn handle_one_event_scoped(&mut self, event: Event) -> Vec<Action> {
         if matches!(event, Event::Tick { .. }) {
+            return self
+                .manager
+                .handle_event(&mut self.state, event)
+                .unwrap_or_else(|e| {
+                    self.log_handle_event_error_once(&e);
+                    Vec::new()
+                });
+        }
+
+        // If not verbose, avoid scope! entirely (prevents "done: event#..." spam)
+        if !self.verbose {
             return self
                 .manager
                 .handle_event(&mut self.state, event)
