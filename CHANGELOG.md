@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - `media.rs`: replaced `sh -lc pactl` invocation with a direct `pactl` call, removing the unnecessary shell wrapper.
+- **Firefox media detection**:
+  - Restored per-tab counting by switching deduplication from process ID to `object.serial`, allowing multiple uncorked Firefox sink-inputs to increment the inhibitor count correctly again.
+  - Discord audio in Firefox is now ignored to prevent browser-based Discord tabs or calls from indefinitely blocking media inhibition. Users should manually pause/inhibit Stasis while in a Discord call if desired.
+
+### Notes
+- Chromium/Vivaldi media detection remains imperfect:
+  - YouTube playback may continue to inhibit until the tab or video is fully closed in some cases.
+  - Browser-based Discord behavior under Chromium is currently unreliable.
+  - Further refinement is planned.
 
 ---
 ## [1.0.0] - 2026-02-26

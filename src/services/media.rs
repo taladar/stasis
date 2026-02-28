@@ -350,6 +350,7 @@ fn parse_pactl_sink_inputs(text: &str, media_blacklist: &[Pattern]) -> MediaSnap
     let mut media_name = String::new();
     let mut sink_str = String::new();
     let mut proc_id = String::new();
+    let mut object_serial = String::new(); // <-- NEW: helps Firefox per-tab counting
 
     let flush_block = |in_block: bool,
                        seen_state: bool,
@@ -362,6 +363,7 @@ fn parse_pactl_sink_inputs(text: &str, media_blacklist: &[Pattern]) -> MediaSnap
                        media_name: &str,
                        sink_str: &str,
                        proc_id: &str,
+                       object_serial: &str,
                        local_keys: &mut HashSet<String>,
                        remote_keys: &mut HashSet<String>| {
         if !in_block {
@@ -385,6 +387,14 @@ fn parse_pactl_sink_inputs(text: &str, media_blacklist: &[Pattern]) -> MediaSnap
             return;
         }
 
+        // ---- Firefox fix: ignore Discord tab/call audio completely ----
+        // This prevents Discord (in-browser) from blocking Stasis “forever”.
+        // (We intentionally trade off: Discord notification sounds won't inhibit.)
+        let is_ff = is_firefox(app_name, app_bin, node_name);
+        if is_ff && looks_like_discord(media_name) {
+            return;
+        }
+
         // Blacklist check (pattern match over combined identity fields)
         if is_blacklisted(media_blacklist, app_name, app_bin, node_name, media_name) {
             return;
@@ -392,8 +402,20 @@ fn parse_pactl_sink_inputs(text: &str, media_blacklist: &[Pattern]) -> MediaSnap
 
         let remote = is_remote_stream(app_name, app_bin, node_name, media_name, sink_str);
 
-        // Dedup key: prefer process id so 2 sink-inputs for the same game/app count once.
-        let key = if !proc_id.is_empty() {
+        // Dedup key strategy:
+        // - Firefox: count *per sink-input* (object.serial best) so multiple playing tabs count.
+        // - Non-Firefox: keep old behavior (pid-based dedup) to avoid overcount from multi-stream apps.
+        let key = if is_ff {
+            if !object_serial.is_empty() {
+                format!("serial:{object_serial}")
+            } else if !media_name.is_empty() {
+                format!("media:{}", media_name.to_lowercase())
+            } else if !node_name.is_empty() {
+                format!("node:{}", node_name.to_lowercase())
+            } else {
+                return;
+            }
+        } else if !proc_id.is_empty() {
             format!("pid:{proc_id}")
         } else if !node_name.is_empty() {
             format!("node:{}", node_name.to_lowercase())
@@ -426,6 +448,7 @@ fn parse_pactl_sink_inputs(text: &str, media_blacklist: &[Pattern]) -> MediaSnap
                 &media_name,
                 &sink_str,
                 &proc_id,
+                &object_serial,
                 &mut local_keys,
                 &mut remote_keys,
             );
@@ -442,6 +465,7 @@ fn parse_pactl_sink_inputs(text: &str, media_blacklist: &[Pattern]) -> MediaSnap
             media_name.clear();
             sink_str.clear();
             proc_id.clear();
+            object_serial.clear();
             continue;
         }
 
@@ -477,6 +501,7 @@ fn parse_pactl_sink_inputs(text: &str, media_blacklist: &[Pattern]) -> MediaSnap
                 "application.process.id" => proc_id = v,
                 "node.name" => node_name = v,
                 "media.name" => media_name = v,
+                "object.serial" => object_serial = v, // <-- NEW
                 _ => {}
             }
         }
@@ -494,6 +519,7 @@ fn parse_pactl_sink_inputs(text: &str, media_blacklist: &[Pattern]) -> MediaSnap
         &media_name,
         &sink_str,
         &proc_id,
+        &object_serial,
         &mut local_keys,
         &mut remote_keys,
     );
@@ -554,6 +580,17 @@ fn is_remote_stream(
     ];
 
     NEEDLES.iter().any(|n| hay.contains(n))
+}
+
+fn is_firefox(app_name: &str, app_bin: &str, node_name: &str) -> bool {
+    let hay = format!("{app_name} {app_bin} {node_name}").to_lowercase();
+    hay.contains("firefox")
+}
+
+/// Very intentionally broad: any Firefox sink-input whose media.name includes "discord"
+/// is treated as "call-ish / realtime comms" and ignored so it can't block forever.
+fn looks_like_discord(media_name: &str) -> bool {
+    media_name.to_lowercase().contains("discord")
 }
 
 // Cheap “game” heuristic: conservative. You can tune these as you observe misses/false positives.
