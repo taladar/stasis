@@ -103,6 +103,18 @@ Design principles:
 
     nix build 'github:saltnpepper97/stasis#stasis'
 
+#### NixOS Notes
+
+**swaylock PAM configuration**
+
+If you use swaylock as your screen locker on NixOS, you must add the following to your NixOS configuration or swaylock will lock the screen but never accept your password to unlock it:
+
+```nix
+security.pam.services.swaylock = {};
+```
+
+---
+
 ### From Source
 
 Dependencies:
@@ -122,6 +134,21 @@ Build & install:
 ---
 
 ## Quick Start
+
+> [!WARNING]
+> **Screen lockers must not be configured to daemonize.**
+> Stasis tracks lock state by waiting for the screen locker process to exit. If your locker is set to daemonize (e.g. `swaylock -f` / `daemonize = true`, or a similar option in other lockers), it will detach from stasis immediately and stasis will interpret this as the screen already being unlocked — causing it to loop back to the first step of your plan.
+>
+> You can confirm this is the issue with `stasis dump` — if the `resume` step fires almost immediately after `lock`, your locker is daemonizing.
+>
+> **Option 1 — Don't daemonize (simplest):** Remove `daemonize = true` or the `-f` flag from your screen locker config.
+>
+> **Option 2 — Use `loginctl` mode:** Enable stasis's `loginctl` mode so it tracks lock state via logind signals instead of process lifetime, then use a wrapper script:
+> ```bash
+> #!/usr/bin/env bash
+> loginctl lock-session
+> swaylock -f
+> ```
 
 Start the daemon:
 
@@ -149,7 +176,7 @@ https://saltnpepper97.github.io/stasis-site/
 
 ## Compositor Support
 
-Stasis integrates with each compositor’s available IPC and standard Wayland protocols.
+Stasis integrates with each compositor's available IPC and standard Wayland protocols.
 
 | Compositor | Support Status | Notes |
 |-----------|----------------|-------|
