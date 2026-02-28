@@ -143,7 +143,7 @@ Build & install:
 >
 > **Option 1 — Don't daemonize (simplest):** Remove `daemonize = true` or the `-f` flag from your screen locker config.
 >
-> **Option 2 — Use `loginctl` mode:** Enable stasis's `loginctl` mode so it tracks lock state via logind signals instead of process lifetime, then use a wrapper script:
+> **Option 2 — Use `enable_loginctl` mode:** Enable stasis's `loginctl` mode so it tracks lock state via logind signals instead of process lifetime, then use a wrapper script:
 > ```bash
 > #!/usr/bin/env bash
 > loginctl lock-session
