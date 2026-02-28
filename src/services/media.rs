@@ -331,14 +331,21 @@ fn read_pactl_snapshot(
         ));
     }
 
+    // Query MPRIS once per poll cycle. Only used to gate Chromium-family
+    // "Playback" streams — the one case pactl cannot distinguish on its own.
+    // If playerctl is absent, MprisState::Unavailable disables the gate
+    // entirely and current behavior is preserved.
+    let mpris = query_mpris();
+
     let s = String::from_utf8_lossy(&out.stdout);
-    parse_pactl_sink_inputs(&s, media_blacklist, local_keys, remote_keys);
+    parse_pactl_sink_inputs(&s, media_blacklist, &mpris, local_keys, remote_keys);
     Ok(())
 }
 
 fn parse_pactl_sink_inputs(
     text: &str,
     media_blacklist: &[Pattern],
+    mpris: &MprisState,
     local_keys: &mut HashSet<String>,
     remote_keys: &mut HashSet<String>,
 ) {
@@ -373,6 +380,20 @@ fn parse_pactl_sink_inputs(
                 if playing
                     && !looks_like_system_audio(&app_name, &app_bin, &node_name, &media_name)
                     && !looks_like_game(&app_name, &app_bin, &node_name)
+                    // Chromium-family browsers emit media.name = "Playback" for every
+                    // open audio context — including idle WebRTC voice streams (Discord,
+                    // Meet, Teams) that produce no audible output. pactl alone cannot
+                    // distinguish these from real playback. For this specific case only,
+                    // we consult MPRIS: if playerctl reports a Playing session for this
+                    // browser we count the stream; if not, we skip it.
+                    //
+                    // All other streams (Firefox, MPV, Spotify, native apps, etc.) never
+                    // hit is_chromium_generic_stream and are completely unaffected.
+                    //
+                    // If playerctl is not installed, MprisState::Unavailable causes
+                    // mpris_confirms_playing to return true, preserving existing behavior.
+                    && (!is_chromium_generic_stream(&app_bin, &media_name)
+                        || mpris_confirms_playing(&app_name, &app_bin, mpris))
                     && !is_blacklisted(media_blacklist, &app_name, &app_bin, &node_name, &media_name)
                 {
                     let key = if !proc_id.is_empty() {
@@ -583,6 +604,89 @@ fn looks_like_game(app_name: &str, app_bin: &str, node_name: &str) -> bool {
         }
     }
     false
+}
+
+// ---------------------------------------------------------------------------
+// MPRIS gate — only consulted for Chromium-family "Playback" streams
+// ---------------------------------------------------------------------------
+
+/// Snapshot of MPRIS player state for the current poll cycle.
+#[derive(Debug)]
+enum MprisState {
+    /// playerctl not found or failed to run — gate is disabled, fall back to
+    /// existing pactl-only behavior so nothing regresses for users without it.
+    Unavailable,
+    /// Set of lowercase player names currently reporting Playing status.
+    Playing(HashSet<String>),
+}
+
+/// Runs `playerctl -a metadata` once and returns which player names are Playing.
+///
+/// This is intentionally best-effort: any failure (binary missing, D-Bus error,
+/// no players registered) returns Unavailable rather than propagating an error.
+/// Called once per pactl poll cycle, not on a separate timer.
+fn query_mpris() -> MprisState {
+    let out = match Command::new("playerctl")
+        .args(["-a", "metadata", "--format", "{{playerName}}|{{status}}"])
+        .output()
+    {
+        Ok(o) => o,
+        Err(_) => return MprisState::Unavailable, // not installed
+    };
+
+    // Non-zero exit is normal when no players exist — still counts as available.
+    let mut playing = HashSet::new();
+    let s = String::from_utf8_lossy(&out.stdout);
+    for line in s.lines() {
+        if let Some((name, status)) = line.split_once('|') {
+            if status.trim().eq_ignore_ascii_case("Playing") {
+                playing.insert(name.trim().to_ascii_lowercase());
+            }
+        }
+    }
+    MprisState::Playing(playing)
+}
+
+/// Returns true only for Chromium-family browsers emitting the generic
+/// "Playback" sentinel — the one case where pactl cannot distinguish real
+/// media playback from idle WebRTC voice streams (Discord, Meet, Teams).
+///
+/// Firefox always emits a meaningful media.name (page title, track name, or
+/// the Discord channel label) so it never matches here.
+fn is_chromium_generic_stream(app_bin: &str, media_name: &str) -> bool {
+    if !media_name.eq_ignore_ascii_case("playback") {
+        return false;
+    }
+    let bin = app_bin.to_ascii_lowercase();
+    bin.contains("chrom")    // chromium, chrome, google-chrome-*
+        || bin.contains("vivaldi")
+        || bin.contains("brave")
+        || bin.contains("opera")
+        || bin.contains("electron")
+        || bin.contains("msedge")
+}
+
+/// Returns true if any currently-Playing MPRIS player name matches this
+/// browser's identity. Uses substring matching in both directions to handle
+/// variants like "vivaldi" ↔ "vivaldi-bin", "chromium" ↔ "Chromium".
+///
+/// If playerctl is unavailable (MprisState::Unavailable), always returns true
+/// so the stream is counted — preserving pre-MPRIS behavior exactly.
+fn mpris_confirms_playing(app_name: &str, app_bin: &str, mpris: &MprisState) -> bool {
+    match mpris {
+        MprisState::Unavailable => true,
+        MprisState::Playing(playing) => {
+            if playing.is_empty() {
+                return false;
+            }
+            let name_lc = app_name.to_ascii_lowercase();
+            let bin_lc  = app_bin.to_ascii_lowercase();
+            playing.iter().any(|p| {
+                name_lc.contains(p.as_str()) || p.contains(name_lc.as_str())
+                    || bin_lc.contains(p.as_str()) || p.contains(bin_lc.as_str())
+            })
+        }
+    }
 }
 
 fn pattern_key(p: &Pattern) -> String {

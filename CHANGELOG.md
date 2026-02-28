@@ -1,24 +1,21 @@
 # Changelog
-
 All notable changes to this project will be documented in this file.
-
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+---
+## [1.1.0] - TBD
+### Added
+- **MPRIS gate for Chromium-family browsers** — Chromium, Vivaldi, Brave, Chrome, Electron, and Edge always emit `media.name = "Playback"` for every open audio context, including idle WebRTC voice streams (Discord, Meet, Teams) that produce no audible output. pactl alone cannot distinguish these from real playback. When a Chromium generic stream is detected, stasis now queries `playerctl` once per poll cycle to confirm an active Playing session exists for that browser before counting it as a media inhibitor. Firefox is unaffected — it always emits meaningful `media.name` values and bypasses this path entirely. All non-browser streams are unaffected. If `playerctl` is not installed, the gate is disabled and existing behavior is preserved exactly.
+
+### Changed
+- `media.rs`: replaced `sh -lc pactl` invocation with a direct `pactl` call, removing the unnecessary shell wrapper.
+
+### Dependencies
+- `playerctl` is now an optional runtime dependency. Required only for accurate Chromium-family media detection. Without it, stasis falls back to pactl-only behavior.
 
 ---
-
-## [1.0.1] - TBD
-
-### Improvements
-
-- `media.rs`: replace `sh -lc` with direct `pactl` invocation
-
----
-
 ## [1.0.0] - 2026-02-26
-
 ### Highlights
-
 - Complete event-driven rewrite
 - Improved memory handling and streamlined internals
 - Services moved out of `core/`
@@ -26,14 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Built-in configuration migrator
 - New logo and visual identity
 - Logs moved to XDG-compliant state directory
-
 ### Added
-
 - **Event-driven architecture** — timers, system signals, lid events, loginctl events, IPC pauses, and media state changes are now coordinated through a structured event system, replacing sequential and implicit flow. Results in more predictable state transitions, cleaner internal boundaries, reduced memory overhead, improved long-running stability, and a more extensible foundation for future features.
 - **Built-in config migrator** — on first launch of 1.0.0, Stasis automatically migrates existing Rune configurations to the latest schema. Most users will not need to manually edit their configuration after upgrading.
-
 ### Changed
-
 - **Media monitoring** — the browser-based media bridge has been removed. Stasis now relies exclusively on `pactl` for media detection. `pipewire-pulse` or `pulseaudio` must be installed and available.
 - **`use_loginctl` → `enable_loginctl`** — renamed and moved to the top level under `default:` in the Rune configuration. No longer defined inside a nested block.
   ```rune
@@ -44,9 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Log directory** — logs now live in `~/.local/state/stasis/` (previously `~/.cache/stasis/`), aligning with the XDG Base Directory Specification.
 - **Services** moved out of `core/`.
 - **Eventline** received structural updates and cleanup.
-
 ### Fixed
-
 - Resolved memory issues related to event handling
 - Eliminated instability from the legacy media bridge
 - Improved long-running session stability
