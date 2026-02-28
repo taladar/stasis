@@ -318,9 +318,9 @@ fn read_pactl_snapshot(
     local_keys: &mut HashSet<String>,
     remote_keys: &mut HashSet<String>,
 ) -> Result<(), String> {
-    let out = Command::new("sh")
-        .arg("-lc")
-        .arg("pactl list sink-inputs")
+    let out = Command::new("pactl")
+        .arg("list")
+        .arg("sink-inputs")
         .output()
         .map_err(|e| format!("failed to run pactl: {e}"))?;
 
