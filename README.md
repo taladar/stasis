@@ -123,7 +123,6 @@ Dependencies:
 - dbus (optional, for lid events and suspend/resume handling)
 - libnotify (optional, for desktop notifications)
 - pulseaudio or pipewire-pulse (optional, for audio/media detection)
-- playerctl (optional, for accurate Chromium-family browser media detection — without it, stasis falls back to pactl-only behavior)
 
 Build & install:
 

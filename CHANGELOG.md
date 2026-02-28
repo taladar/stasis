@@ -3,15 +3,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ---
-## [1.1.0] - TBD
-### Added
-- **MPRIS gate for Chromium-family browsers** — Chromium, Vivaldi, Brave, Chrome, Electron, and Edge always emit `media.name = "Playback"` for every open audio context, including idle WebRTC voice streams (Discord, Meet, Teams) that produce no audible output. pactl alone cannot distinguish these from real playback. When a Chromium generic stream is detected, stasis now queries `playerctl` once per poll cycle to confirm an active Playing session exists for that browser before counting it as a media inhibitor. Firefox is unaffected — it always emits meaningful `media.name` values and bypasses this path entirely. All non-browser streams are unaffected. If `playerctl` is not installed, the gate is disabled and existing behavior is preserved exactly.
+## [TBD] - TBD
 
 ### Changed
 - `media.rs`: replaced `sh -lc pactl` invocation with a direct `pactl` call, removing the unnecessary shell wrapper.
-
-### Dependencies
-- `playerctl` is now an optional runtime dependency. Required only for accurate Chromium-family media detection. Without it, stasis falls back to pactl-only behavior.
 
 ---
 ## [1.0.0] - 2026-02-26
