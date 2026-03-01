@@ -5,18 +5,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [TBD] - TBD
+## [1.1.0] - TBD
 
 ### Changed
 
 - `media.rs`: replaced `sh -lc pactl` invocation with a direct `pactl` call, removing the unnecessary shell wrapper.
 
-- **media: restore Firefox per-tab counting; refine Chromium handling; ignore Discord audio**
-  - Use `object.serial` as the Firefox dedup key so multiple uncorked sink-inputs count per tab again.
-  - Drop Firefox sink-inputs whose `media.name` looks like Discord to prevent “Discord tab/call” from inhibiting indefinitely.
-  - Small refinements to Chromium-based browser handling to better ignore Discord-related audio streams.
-  - Note: Discord calls are now expected to use manual pause/inhibit instead.
-  - Chromium/Vivaldi detection now behaves correctly, though media state changes (e.g. YouTube stopping) may resolve slightly slower than Firefox due to inherent browser/pipewire behavior.
+- **media: complete overhaul of sink-input and source-output detection**
+  - Removed `pactl list sinks` RUNNING gate — sink state persists after leaving a Discord call, causing false positives that held inhibitors open indefinitely.
+  - Added `pactl list source-outputs` parsing. Any active (uncorked) source-output counts as a call inhibitor (`call` bucket), independent of sink-input state. This correctly reflects mic capture as an active session signal.
+  - Firefox sink-inputs are now deduped by `media.name` (tab title) rather than `object.serial`, preventing PipeWire from double-counting the same tab via multiple sink-input blocks.
+  - Firefox sink-inputs whose `media.name` contains `"discord"` are always suppressed (covers `"• Discord | General | …"` tab titles).
+  - Any browser PID found in `capturing_pids` (has an active source-output) has its generic-named sink-inputs suppressed. Real media titles (YouTube, etc.) are not affected and always pass through.
+  - Chromium/Vivaldi sink-inputs with generic `media.name` values (`"Playback"`, `"AudioStream"`, etc.) are suppressed when the PID is actively capturing — correctly handling Vivaldi's Discord call audio zombie without blocking legitimate YouTube playback.
+  - `playing_streams_total` and `playing_streams_chromium` heuristic counters are now incremented **after** filtering, ensuring the chromium single-stream heuristic fires correctly even when a filtered-out Firefox Discord tab is simultaneously uncorked.
+  - Reduced `chromium_single_grace_ms` from 5 000 ms to 1 500 ms for snappier post-call cleanup.
+  - Replaced large closure-with-18-parameters pattern with `macro_rules! flush!()` in both sink-input and source-output parsers, improving readability and eliminating borrow-checker friction.
 
 - **Logging noise reduction (IPC & event scopes)**
   - Gated `eventline::scope!("event")` behind `--verbose`, eliminating `done: event#N` spam during normal operation.
@@ -42,6 +46,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Eliminated excessive `done: event#…` log lines during normal operation.
 - Prevented Waybar polling from flooding daemon logs.
 - Reduced log churn under steady-state idle operation.
+- Fixed inhibitor count staying permanently elevated after leaving a Discord call in any browser.
+- Fixed Firefox counting one playing tab as two due to PipeWire creating duplicate sink-input blocks.
+- Fixed Chromium/Vivaldi Discord zombie stream holding `local=1` after a call ends.
+- Fixed chromium single-stream heuristic never firing when a filtered Firefox Discord tab was simultaneously uncorked (inflating `streams_total` and blocking the heuristic).
 
 ---
 
