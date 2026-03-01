@@ -209,6 +209,7 @@ impl MediaService {
         self
     }
 
+    #[allow(dead_code)]
     pub fn with_chromium_single_grace_ms(mut self, ms: u64) -> Self {
         self.chromium_single_grace_ms = ms;
         self
