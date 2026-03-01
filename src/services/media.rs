@@ -235,10 +235,19 @@ impl MediaService {
         }
         self.last_poll_ms = now_ms;
 
-        let snapshot = match read_pactl_snapshot(&self.media_blacklist) {
+        let mut snapshot = match read_pactl_snapshot(&self.media_blacklist) {
             Ok(s) => s,
             Err(_e) => MediaSnapshot::default(),
         };
+
+        // NEW: If no sinks are RUNNING, treat all sink-input activity as idle.
+        // This prevents “uncorked zombie” streams from inhibiting forever.
+        //
+        // If pactl sinks fails, we default to "running" (safe) inside read_pactl_snapshot().
+        if !snapshot.any_sink_running {
+            snapshot.local_keys.clear();
+            snapshot.remote_keys.clear();
+        }
 
         let local = snapshot.local_keys.len() as u64;
         let remote = snapshot.remote_keys.len() as u64;
@@ -266,21 +275,23 @@ impl MediaService {
         // -------- INFO logging (consistent) --------
         if count_changed {
             eventline::info!(
-                "media: count {} -> {} (local={}, remote={}, ignore_remote={})",
+                "media: count {} -> {} (local={}, remote={}, ignore_remote={}, sinks_running={})",
                 prev_count,
                 inhibitor_count,
                 local,
                 remote,
-                self.ignore_remote_media
+                self.ignore_remote_media,
+                snapshot.any_sink_running
             );
         } else if (first_poll || self.force_emit) && inhibitor_count != 0 {
             eventline::info!(
-                "media: count {} -> {} (local={}, remote={}, ignore_remote={})",
+                "media: count {} -> {} (local={}, remote={}, ignore_remote={}, sinks_running={})",
                 0u64,
                 inhibitor_count,
                 local,
                 remote,
-                self.ignore_remote_media
+                self.ignore_remote_media,
+                snapshot.any_sink_running
             );
         }
         // ------------------------------------------
@@ -311,24 +322,52 @@ struct MediaSnapshot {
     // dedup: each “app” counts once even if multiple sink-inputs exist
     local_keys: HashSet<String>,
     remote_keys: HashSet<String>,
+
+    // NEW: global “is the audio device actually active?”
+    any_sink_running: bool,
 }
 
 fn read_pactl_snapshot(media_blacklist: &[Pattern]) -> Result<MediaSnapshot, String> {
-    let out = Command::new("pactl")
+    // --- sink-inputs (per-stream) ---
+    let out_inputs = Command::new("pactl")
         .arg("list")
         .arg("sink-inputs")
         .output()
-        .map_err(|e| format!("failed to run pactl: {e}"))?;
+        .map_err(|e| format!("failed to run pactl sink-inputs: {e}"))?;
 
-    if !out.status.success() {
+    if !out_inputs.status.success() {
         return Err(format!(
-            "pactl exited non-zero: {}",
-            out.status.code().unwrap_or(-1)
+            "pactl sink-inputs exited non-zero: {}",
+            out_inputs.status.code().unwrap_or(-1)
         ));
     }
 
-    let s = String::from_utf8_lossy(&out.stdout);
-    Ok(parse_pactl_sink_inputs(&s, media_blacklist))
+    // --- sinks (device-level state) ---
+    // If this fails, DO NOT force-unpause: assume running (safe default).
+    let any_sink_running = match Command::new("pactl").arg("list").arg("sinks").output() {
+        Ok(out_sinks) if out_sinks.status.success() => {
+            let sinks_txt = String::from_utf8_lossy(&out_sinks.stdout);
+            parse_pactl_sinks_any_running(&sinks_txt)
+        }
+        _ => true,
+    };
+
+    let inputs_txt = String::from_utf8_lossy(&out_inputs.stdout);
+    let mut snap = parse_pactl_sink_inputs(&inputs_txt, media_blacklist);
+    snap.any_sink_running = any_sink_running;
+    Ok(snap)
+}
+
+fn parse_pactl_sinks_any_running(text: &str) -> bool {
+    for line in text.lines() {
+        let l = line.trim();
+        if let Some(rest) = l.strip_prefix("State:") {
+            if rest.trim().eq_ignore_ascii_case("RUNNING") {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 fn parse_pactl_sink_inputs(text: &str, media_blacklist: &[Pattern]) -> MediaSnapshot {
@@ -338,6 +377,7 @@ fn parse_pactl_sink_inputs(text: &str, media_blacklist: &[Pattern]) -> MediaSnap
     let mut in_block = false;
 
     // We consider playing if corked==false, otherwise fall back to RUNNING.
+    // NOTE: On PipeWire-pulse, sink-input blocks often lack "State:" entirely.
     let mut seen_state = false;
     let mut is_running = false;
     let mut seen_corked = false;
@@ -350,7 +390,7 @@ fn parse_pactl_sink_inputs(text: &str, media_blacklist: &[Pattern]) -> MediaSnap
     let mut media_name = String::new();
     let mut sink_str = String::new();
     let mut proc_id = String::new();
-    let mut object_serial = String::new(); // <-- NEW: helps Firefox per-tab counting
+    let mut object_serial = String::new(); // helps Firefox per-tab counting
 
     let flush_block = |in_block: bool,
                        seen_state: bool,
@@ -501,7 +541,7 @@ fn parse_pactl_sink_inputs(text: &str, media_blacklist: &[Pattern]) -> MediaSnap
                 "application.process.id" => proc_id = v,
                 "node.name" => node_name = v,
                 "media.name" => media_name = v,
-                "object.serial" => object_serial = v, // <-- NEW
+                "object.serial" => object_serial = v,
                 _ => {}
             }
         }
@@ -527,6 +567,7 @@ fn parse_pactl_sink_inputs(text: &str, media_blacklist: &[Pattern]) -> MediaSnap
     MediaSnapshot {
         local_keys,
         remote_keys,
+        any_sink_running: true, // overwritten by read_pactl_snapshot()
     }
 }
 
