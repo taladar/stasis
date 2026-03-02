@@ -15,7 +15,7 @@
 <p align="center">
   <img src="https://img.shields.io/github/last-commit/saltnpepper97/stasis?style=for-the-badge&color=%2328A745" alt="GitHub last commit"/>
   <img src="https://img.shields.io/aur/version/stasis?style=for-the-badge" alt="AUR version">
-  <img src="https://img.shields.io/badge/License-MIT-E5534B?style=for-the-badge" alt="MIT License"/>
+  <img src="https://img.shields.io/badge/License-GPLv3-E5534B?style=for-the-badge" alt="MIT License"/>
   <img src="https://img.shields.io/badge/Wayland-00BFFF?style=for-the-badge&logo=wayland&logoColor=white" alt="Wayland"/>
   <img src="https://img.shields.io/badge/Rust-1.89+-orange?style=for-the-badge&logo=rust&logoColor=white" alt="Rust"/>
 </p>
@@ -219,7 +219,7 @@ GitHub Sponsors helps ensure continued maintenance, faster bug fixes, and long-t
 
 ## License
 
-Released under the MIT License.
+Released under the GPLv3 License.
 
 ---
 
