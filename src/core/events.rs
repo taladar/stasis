@@ -3,14 +3,13 @@
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActivityKind {
-    Any
+    Any,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MediaState {
     Idle,
     PlayingLocal,
-    PlayingRemote,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,8 +24,34 @@ pub enum Event {
         now_ms: u64,
     },
 
+    /// Input/activity observed (source-agnostic).
     UserActivity {
         kind: ActivityKind,
+        now_ms: u64,
+    },
+
+    /// Browser-reported user activity pulse (e.g. extension/native host).
+    /// This should behave like input activity for idle timing, but does not
+    /// contribute to inhibitor counters.
+    BrowserActivity {
+        now_ms: u64,
+    },
+
+    /// Browser reports that playback/activity keepalive is no longer active.
+    BrowserInactive {
+        now_ms: u64,
+    },
+
+    /// Compositor-reported "seat has been idle for N ms" via ext-idle-notify-v1.
+    ///
+    /// NOTE: Some compositors may not send `CompositorResumed` reliably (niri currently),
+    /// so this should not be the sole correctness mechanism for activity tracking.
+    CompositorIdled {
+        now_ms: u64,
+    },
+
+    /// Compositor-reported "seat resumed from idle" via ext-idle-notify-v1.
+    CompositorResumed {
         now_ms: u64,
     },
 
@@ -102,6 +127,10 @@ impl Event {
         match self {
             Event::Tick { now_ms }
             | Event::UserActivity { now_ms, .. }
+            | Event::BrowserActivity { now_ms }
+            | Event::BrowserInactive { now_ms }
+            | Event::CompositorIdled { now_ms }
+            | Event::CompositorResumed { now_ms }
             | Event::MediaStateChanged { now_ms, .. }
             | Event::PowerChanged { now_ms, .. }
             | Event::LidClosed { now_ms }

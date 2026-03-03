@@ -75,16 +75,21 @@ impl Daemon {
             epoch: self.inhibit_epoch,
             apps: self.inhibit_apps.clone(),
         });
-        tokio::spawn(crate::services::app_inhibit::run_app_inhibit(tx.clone(), app_rules_rx));
+        tokio::spawn(crate::services::app_inhibit::run_app_inhibit(
+            tx.clone(),
+            app_rules_rx,
+        ));
 
-        let (media_rules_tx, media_rules_rx) =
-            watch::channel(crate::services::media::MediaRules {
-                epoch: self.inhibit_epoch,
-                monitor_media: self.monitor_media,
-                ignore_remote_media: self.ignore_remote_media,
-                media_blacklist: self.media_blacklist.clone(),
-            });
-        tokio::spawn(crate::services::media::run_media(tx.clone(), media_rules_rx));
+        let (media_rules_tx, media_rules_rx) = watch::channel(crate::services::media::MediaRules {
+            epoch: self.inhibit_epoch,
+            monitor_media: self.monitor_media,
+            ignore_remote_media: self.ignore_remote_media,
+            media_blacklist: self.media_blacklist.clone(),
+        });
+        tokio::spawn(crate::services::media::run_media(
+            tx.clone(),
+            media_rules_rx,
+        ));
 
         if matches!(self.chassis, crate::core::utils::ChassisKind::Laptop) {
             tokio::spawn(crate::services::power::run_power(tx.clone()));

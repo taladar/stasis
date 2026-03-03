@@ -110,6 +110,16 @@ Custom steps can be triggered by their name (normalized) and also by
 \fBcustom:\fR or \fBcustom-\fR prefixes.
 
 .TP
+.B browser-activity
+Send a browser activity pulse to the running daemon.
+This resets idle timing like user activity but does not set inhibitor counts.
+
+.TP
+.B browser-inactive
+Send a browser inactive pulse to the running daemon.
+This clears browser hold immediately.
+
+.TP
 .B toggle-inhibit
 Toggle manual idle inhibition. When inhibited, timers are paused.
 

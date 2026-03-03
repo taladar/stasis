@@ -7,8 +7,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 pub fn default_log_path() -> Option<PathBuf> {
-    let state_base = dirs::state_dir()
-        .or_else(|| dirs::home_dir().map(|h| h.join(".local/state")))?;
+    let state_base =
+        dirs::state_dir().or_else(|| dirs::home_dir().map(|h| h.join(".local/state")))?;
 
     Some(state_base.join("stasis").join("stasis.log"))
 }
@@ -80,11 +80,10 @@ fn wayland_socket_path_probe() -> Result<PathBuf, String> {
         }
     }
 
-    for entry in std::fs::read_dir(&rt)
-        .map_err(|e| format!("failed to read {}: {e}", rt.display()))?
+    for entry in
+        std::fs::read_dir(&rt).map_err(|e| format!("failed to read {}: {e}", rt.display()))?
     {
-        let entry =
-            entry.map_err(|e| format!("failed to read entry in {}: {e}", rt.display()))?;
+        let entry = entry.map_err(|e| format!("failed to read entry in {}: {e}", rt.display()))?;
         let name = entry.file_name();
         let name = name.to_string_lossy();
 
@@ -116,9 +115,12 @@ pub fn ensure_wayland_alive() -> Result<(), String> {
         }
     })?;
 
-    UnixStream::connect(&sock)
-        .map(|_| ())
-        .map_err(|e| format!("failed to connect to wayland socket {}: {e}", sock.display()))
+    UnixStream::connect(&sock).map(|_| ()).map_err(|e| {
+        format!(
+            "failed to connect to wayland socket {}: {e}",
+            sock.display()
+        )
+    })
 }
 
 fn wayland_socket_path() -> Result<PathBuf, String> {

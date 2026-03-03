@@ -10,8 +10,8 @@ use std::path::{Path, PathBuf};
 use rune_cfg::{RuneConfig, Value};
 
 use crate::core::config::{
-    ActionBlock, Config, ConfigFile, LockBlock, PartialConfig, PlanSource, PlanStep,
-    PlanStepKind, Profile, ProfileMode, Pattern,
+    ActionBlock, Config, ConfigFile, LockBlock, PartialConfig, Pattern, PlanSource, PlanStep,
+    PlanStepKind, Profile, ProfileMode,
 };
 
 /// Loaded config + the concrete path that succeeded.
@@ -154,7 +154,7 @@ fn parse_config_file(rc: &RuneConfig) -> Result<ConfigFile, String> {
             cfg.lid_close_action = parse_lid_action(rc, "default.lid_close_action")?;
             cfg.lid_open_action = parse_lid_action(rc, "default.lid_open_action")?;
 
-            // legacy named blocks (optional)
+            // mirror named blocks for info/debug output and compatibility fields
             cfg.startup = ActionBlock::disabled();
             cfg.brightness = ActionBlock::disabled();
             cfg.dpms = ActionBlock::disabled();
@@ -163,8 +163,9 @@ fn parse_config_file(rc: &RuneConfig) -> Result<ConfigFile, String> {
 
             // ---- plans ----
             // desktop plan: blocks directly under default (EXCEPT ac/battery containers + globals)
-            let plan_desktop =
-                parse_plan_block(rc, "default", /*allow_ac_battery_containers=*/true, &mut cfg)?;
+            let plan_desktop = parse_plan_block(
+                rc, "default", /*allow_ac_battery_containers=*/ true, &mut cfg,
+            )?;
 
             // laptop plan sources
             let plan_ac = parse_named_plan(rc, "default.ac")?;
@@ -202,7 +203,7 @@ fn parse_plan_block(
     rc: &RuneConfig,
     block_name: &str,
     allow_ac_battery_containers: bool,
-    legacy_out: &mut Config,
+    named_blocks_out: &mut Config,
 ) -> Result<Vec<PlanStep>, String> {
     let keys = rc.get_keys(block_name).unwrap_or_default();
     let mut plan: Vec<PlanStep> = Vec::new();
@@ -272,7 +273,7 @@ fn parse_plan_block(
         match k_norm.as_str() {
             "lock_screen" => {
                 let lb = parse_lock_block(rc, &base)?;
-                legacy_out.lock_screen = lb.clone();
+                named_blocks_out.lock_screen = lb.clone();
 
                 plan.push(PlanStep {
                     kind: PlanStepKind::LockScreen,
@@ -285,22 +286,22 @@ fn parse_plan_block(
             }
             "startup" => {
                 let ab = parse_action_block(rc, &base)?;
-                legacy_out.startup = ab.clone();
+                named_blocks_out.startup = ab.clone();
                 plan.push(step_from_action_block(PlanStepKind::Startup, ab));
             }
             "brightness" => {
                 let ab = parse_action_block(rc, &base)?;
-                legacy_out.brightness = ab.clone();
+                named_blocks_out.brightness = ab.clone();
                 plan.push(step_from_action_block(PlanStepKind::Brightness, ab));
             }
             "dpms" => {
                 let ab = parse_action_block(rc, &base)?;
-                legacy_out.dpms = ab.clone();
+                named_blocks_out.dpms = ab.clone();
                 plan.push(step_from_action_block(PlanStepKind::Dpms, ab));
             }
             "suspend" => {
                 let ab = parse_action_block(rc, &base)?;
-                legacy_out.suspend = ab.clone();
+                named_blocks_out.suspend = ab.clone();
                 plan.push(step_from_action_block(PlanStepKind::Suspend, ab));
             }
             other => {
@@ -323,7 +324,12 @@ fn parse_named_plan(rc: &RuneConfig, base: &str) -> Result<Vec<PlanStep>, String
     }
 
     let mut dummy_cfg = Config::disabled();
-    parse_plan_block(rc, base, /*allow_ac_battery_containers=*/false, &mut dummy_cfg)
+    parse_plan_block(
+        rc,
+        base,
+        /*allow_ac_battery_containers=*/ false,
+        &mut dummy_cfg,
+    )
 }
 
 /// Parse profiles (top-level blocks other than `default`).
@@ -355,8 +361,8 @@ fn parse_profiles(rc: &RuneConfig) -> Result<Vec<Profile>, String> {
             continue; // global scalar/array/etc, not a profile block
         }
 
-        let mode_s = opt_string(rc, format!("{name}.mode"))?
-            .unwrap_or_else(|| "overlay".to_string());
+        let mode_s =
+            opt_string(rc, format!("{name}.mode"))?.unwrap_or_else(|| "overlay".to_string());
 
         let mode = match mode_s.trim().to_lowercase().as_str() {
             "overlay" => ProfileMode::Overlay,
@@ -389,9 +395,13 @@ fn parse_profiles(rc: &RuneConfig) -> Result<Vec<Profile>, String> {
         pc.lid_open_action = parse_lid_action_override(rc, &format!("{name}.lid_open_action"))?;
 
         // plan overrides
-        let mut legacy_dummy = Config::disabled();
-        let plan_desktop =
-            parse_plan_block(rc, &name, /*allow_ac_battery_containers=*/true, &mut legacy_dummy)?;
+        let mut named_blocks_dummy = Config::disabled();
+        let plan_desktop = parse_plan_block(
+            rc,
+            &name,
+            /*allow_ac_battery_containers=*/ true,
+            &mut named_blocks_dummy,
+        )?;
         let plan_ac = parse_named_plan(rc, &format!("{name}.ac"))?;
         let plan_battery = parse_named_plan(rc, &format!("{name}.battery"))?;
 

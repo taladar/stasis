@@ -5,7 +5,7 @@ use crate::core::events::Event;
 use crate::core::manager_msg::ManagerMsg;
 
 use tokio::sync::mpsc::Sender;
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
 
 pub async fn run_ticker(tx: Sender<ManagerMsg>) {
     eventline::info!("ticker started");
@@ -15,7 +15,11 @@ pub async fn run_ticker(tx: Sender<ManagerMsg>) {
 
         let now_ms = now_ms();
         // If the daemon is gone, stop.
-        if tx.send(ManagerMsg::Event(Event::Tick { now_ms })).await.is_err() {
+        if tx
+            .send(ManagerMsg::Event(Event::Tick { now_ms }))
+            .await
+            .is_err()
+        {
             eventline::warn!("ticker stopping (receiver dropped)");
             break;
         }

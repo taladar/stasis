@@ -12,6 +12,11 @@ use crate::core::{
 use super::Manager;
 
 impl Manager {
+    // Browser extension activity is authoritative for browser-originated usage.
+    // Hold window is refreshed by browser keepalive pulses and cleared on
+    // browser-inactive edges.
+    const BROWSER_ACTIVITY_HOLD_MS: u64 = 10_000;
+
     pub fn handle_event(&mut self, state: &mut State, event: Event) -> Result<Vec<Action>, Error> {
         let now_ms = event.now_ms();
         let cfg = self.effective_cfg(state)?;
@@ -32,12 +37,35 @@ impl Manager {
                     return Ok(out);
                 }
 
+                // Browser keepalive/activity pulses keep us in waiting-for-idle.
+                if state.browser_activity_active(now_ms) {
+                    return Ok(out);
+                }
+
                 self.advance_past_lock_if_needed(state, &cfg);
                 out.extend(self.maybe_fire_next_step(state, &cfg, now_ms));
             }
 
             Event::UserActivity { .. } => {
                 self.handle_activity_like_event(state, &cfg, now_ms, &mut out);
+            }
+
+            Event::BrowserActivity { .. } => {
+                state.note_browser_activity(now_ms, Self::BROWSER_ACTIVITY_HOLD_MS);
+                self.handle_activity_like_event(state, &cfg, now_ms, &mut out);
+            }
+
+            Event::BrowserInactive { .. } => {
+                state.clear_browser_activity();
+
+                // If browser activity was authoritative and caused us to skip
+                // compositor-idled edges, transition into idle timing now.
+                if state.debounce_pending() && !state.paused() {
+                    state.set_debounce_pending(false);
+                    state.set_step_base_ms(now_ms);
+                    state.set_pre_action_notify_sent(false);
+                    state.set_pre_action_notify_ms(0);
+                }
             }
 
             Event::ManualPause { .. } => {
@@ -57,7 +85,7 @@ impl Manager {
                 self.handle_activity_like_event(state, &cfg, now_ms, &mut out);
             }
 
-            // IMPORTANT: notify_on_unpause should ONLY fire for auto-resume from
+            // notify_on_unpause should ONLY fire for auto-resume from
             // `stasis pause for/until` when the pause expires internally.
             Event::PauseExpired { message, .. } => {
                 if state.manually_paused() {
@@ -97,7 +125,13 @@ impl Manager {
                             let is_brightness = Self::is_brightness_group(step);
                             let is_lock = Self::is_lock_step(step);
 
-                            state.mark_step_fired(idx, is_dpms, is_brightness, is_lock, arms_resume);
+                            state.mark_step_fired(
+                                idx,
+                                is_dpms,
+                                is_brightness,
+                                is_lock,
+                                arms_resume,
+                            );
                             emitted_any = true;
                         }
 
@@ -288,8 +322,8 @@ impl Manager {
                 let old = self.last_media;
                 self.last_media = m;
 
-                let media_ended = matches!(old, MediaState::PlayingLocal | MediaState::PlayingRemote)
-                    && matches!(m, MediaState::Idle);
+                let media_ended =
+                    matches!(old, MediaState::PlayingLocal) && matches!(m, MediaState::Idle);
 
                 if media_ended {
                     self.handle_activity_like_event(state, &cfg, now_ms, &mut out);
@@ -301,6 +335,31 @@ impl Manager {
                     }
                 } else {
                     self.refresh_paused(state, now_ms);
+                }
+            }
+
+            Event::CompositorResumed { .. } => {
+                // Treat exactly like activity.
+                self.handle_activity_like_event(state, &cfg, now_ms, &mut out);
+            }
+
+            Event::CompositorIdled { .. } => {
+                // If browser reports active playback/usage, extension state wins.
+                if state.browser_activity_active(now_ms) {
+                    return Ok(out);
+                }
+
+                // We have entered true idle per compositor.
+                // This is the transition from "waiting for idle" -> "idle active".
+                if state.debounce_pending() && !state.paused() {
+                    state.set_debounce_pending(false);
+
+                    // Start timing from *idle start*, not from last activity.
+                    state.set_step_base_ms(now_ms);
+
+                    // Restart notify scheduling relative to this idle episode.
+                    state.set_pre_action_notify_sent(false);
+                    state.set_pre_action_notify_ms(0);
                 }
             }
         }
@@ -612,10 +671,7 @@ impl Manager {
             .saturating_add(timeout_ms);
 
         let has_notification = cfg.notify_before_action && step.notification.is_some();
-        let notify_wait_ms = step
-            .notify_seconds_before
-            .unwrap_or(0)
-            .saturating_mul(1000);
+        let notify_wait_ms = step.notify_seconds_before.unwrap_or(0).saturating_mul(1000);
 
         if has_notification {
             if now_ms < base_due_ms && !state.pre_action_notify_sent() {

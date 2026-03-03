@@ -1,26 +1,27 @@
 // Author: Dustin Pilgrim
 // License: MIT
-
+//
+use rustix::fd::AsFd;
+use std::os::fd::BorrowedFd;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc,
+    atomic::{AtomicBool, Ordering},
 };
-use std::os::fd::{AsFd, BorrowedFd};
 use std::time::Duration;
-use tokio::sync::{mpsc, watch};
 
+use tokio::sync::{mpsc, watch};
 use wayland_client::{
+    Connection, Dispatch, QueueHandle, WEnum,
     protocol::{
         wl_keyboard::WlKeyboard,
         wl_pointer::WlPointer,
         wl_registry,
         wl_seat::{self, WlSeat},
     },
-    Connection, Dispatch, QueueHandle, WEnum,
 };
 use wayland_protocols::ext::idle_notify::v1::client::{
-    ext_idle_notifier_v1::ExtIdleNotifierV1,
     ext_idle_notification_v1::{Event as IdleEvent, ExtIdleNotificationV1},
+    ext_idle_notifier_v1::ExtIdleNotifierV1,
 };
 
 use crate::core::events::{ActivityKind, Event};
@@ -50,7 +51,7 @@ struct WaylandState {
     seat: Option<WlSeat>,
     notification: Option<ExtIdleNotificationV1>,
 
-    // Direct input listeners so activity is immediate (no idle-notify edge cases)
+    // Direct input listeners so activity is immediate (best-effort; focus rules apply)
     pointer: Option<WlPointer>,
     keyboard: Option<WlKeyboard>,
 
@@ -77,6 +78,20 @@ impl WaylandState {
             now_ms,
         }));
     }
+
+    fn emit_compositor_idled(&self) {
+        let now_ms = crate::core::utils::now_ms();
+        let _ = self
+            .tx
+            .try_send(ManagerMsg::Event(Event::CompositorIdled { now_ms }));
+    }
+
+    fn emit_compositor_resumed(&self) {
+        let now_ms = crate::core::utils::now_ms();
+        let _ = self
+            .tx
+            .try_send(ManagerMsg::Event(Event::CompositorResumed { now_ms }));
+    }
 }
 
 // ---------------- Registry binding ----------------
@@ -90,7 +105,10 @@ impl Dispatch<wl_registry::WlRegistry, ()> for WaylandState {
         _: &Connection,
         qh: &QueueHandle<Self>,
     ) {
-        if let wl_registry::Event::Global { name, interface, .. } = event {
+        if let wl_registry::Event::Global {
+            name, interface, ..
+        } = event
+        {
             match interface.as_str() {
                 "ext_idle_notifier_v1" => {
                     state.idle_notifier =
@@ -114,7 +132,8 @@ impl Dispatch<ExtIdleNotifierV1, ()> for WaylandState {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        // no-op
+        // no-op: ExtIdleNotifierV1 is a factory/manager object.
+        // Events are on ExtIdleNotificationV1.
     }
 }
 
@@ -209,10 +228,14 @@ impl Dispatch<ExtIdleNotificationV1, ()> for WaylandState {
     ) {
         match event {
             IdleEvent::Resumed => {
+                // Note: niri may not send this reliably, but when it does, treat as activity.
+                state.emit_compositor_resumed();
                 state.emit_activity();
             }
             IdleEvent::Idled => {
-                // intentionally ignored; core timing is driven by Tick
+                state.emit_compositor_idled();
+                // Intentionally do NOT drive plan timing from this event.
+                // Tick remains the source of truth for time-based firing.
             }
             _ => {}
         }
@@ -222,7 +245,7 @@ impl Dispatch<ExtIdleNotificationV1, ()> for WaylandState {
 /// Poll the Wayland connection fd with a timeout (milliseconds).
 /// Returns true if data is available, false on timeout.
 fn poll_wayland_fd(fd: std::os::unix::io::RawFd, timeout_ms: i32) -> Result<bool, String> {
-    use rustix::event::{poll, PollFd, PollFlags, Timespec};
+    use rustix::event::{PollFd, PollFlags, Timespec, poll};
     use rustix::io::Errno;
 
     // Match poll(2) semantics: negative timeout means "infinite".
@@ -248,20 +271,6 @@ fn poll_wayland_fd(fd: std::os::unix::io::RawFd, timeout_ms: i32) -> Result<bool
 }
 
 /// Spawnable Wayland service.
-///
-/// Now accepts `shutdown_tx` so that when the compositor disconnects for any
-/// reason, the daemon shuts down immediately. This is the correct behaviour:
-/// stasis is a per-session idle manager and has no useful work to do without
-/// a live compositor. The previous behaviour was to return `Ok(())` silently,
-/// leaving the daemon alive with no input source whatsoever. The ticker would
-/// then keep firing, `maybe_fire_next_step` would advance the plan uncontested,
-/// and when the user returned to a compositor there was nothing resetting the
-/// idle timer so input appeared to be ignored.
-///
-/// The dispatch loop uses poll(2) with a short timeout rather than
-/// `blocking_dispatch` so the stop flag is checked regularly, preventing the
-/// blocking thread from hanging on exit (which previously kept the process
-/// alive past its intended lifetime and blocked the instance lock socket).
 pub async fn run_wayland(
     tx: mpsc::Sender<ManagerMsg>,
     mut shutdown: watch::Receiver<bool>,
@@ -373,9 +382,6 @@ pub async fn run_wayland(
     });
 
     if compositor_gone {
-        // Compositor is gone — shut the whole daemon down immediately.
-        // There is no point staying alive: no input source exists, the plan
-        // will run uncontested, and the user cannot interrupt it on return.
         eventline::info!("wayland: compositor disconnected; shutting down");
         let _ = shutdown_tx.send(true);
     } else {

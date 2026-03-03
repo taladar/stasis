@@ -28,11 +28,7 @@ pub struct WaybarInfo {
 }
 
 impl InfoSnapshot {
-    pub fn new(
-        waybar: WaybarInfo,
-        pretty_text: impl Into<String>,
-        manually_paused: bool,
-    ) -> Self {
+    pub fn new(waybar: WaybarInfo, pretty_text: impl Into<String>, manually_paused: bool) -> Self {
         Self {
             waybar,
             pretty_text: pretty_text.into(),
@@ -40,4 +36,3 @@ impl InfoSnapshot {
         }
     }
 }
-

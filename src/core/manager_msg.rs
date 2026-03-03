@@ -3,11 +3,7 @@
 
 use tokio::sync::oneshot;
 
-use crate::core::{
-    config::Pattern,
-    events::Event,
-    info::InfoSnapshot,
-};
+use crate::core::{config::Pattern, events::Event, info::InfoSnapshot};
 
 #[derive(Debug, Clone, Copy)]
 pub enum ListKind {
@@ -19,7 +15,9 @@ pub enum ListKind {
 pub enum ManagerMsg {
     Event(Event),
 
-    GetInfo { reply: oneshot::Sender<InfoSnapshot> },
+    GetInfo {
+        reply: oneshot::Sender<InfoSnapshot>,
+    },
 
     List {
         kind: ListKind,

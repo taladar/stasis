@@ -4,7 +4,7 @@
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::UnixStream,
-    time::{timeout, Duration},
+    time::{Duration, timeout},
 };
 
 pub async fn send_raw(cmd: &str) -> Result<String, String> {

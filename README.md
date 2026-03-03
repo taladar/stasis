@@ -41,9 +41,9 @@ It is a **context-aware, event-driven idle manager** built around explicit state
 - 🎵 Media-aware idle handling
   - Optional audio-based detection
   - Differentiates active, paused, and muted streams
-- 🌐 Per-tab browser media detection
-  - Built-in and event-driven
-  - No browser extensions required
+- 🌐 Browser activity/media bridge (recommended)
+  - Event-driven browser pulses (`browser-activity` / `browser-inactive`)
+  - Reliable behavior across Firefox and Chromium with one shared extension codebase
 - 🚫 Application-specific inhibitors
   - Prevent idle when selected apps are running
   - Regex-based matching supported
@@ -156,6 +156,50 @@ Start the daemon:
 
 Full quick start guide, configuration examples, and documentation:  
 https://saltnpepper97.github.io/stasis-site/
+
+---
+
+## Browser Integration (Recommended)
+
+For reliable browser behavior, Stasis now supports a native browser bridge:
+
+- Browser extension emits `browser-activity` and `browser-inactive` pulses.
+- Stasis keeps browser signals in a waiting-for-idle state without inflating inhibitor counts.
+- Non-browser media and `inhibit_apps` still use core service counters.
+
+Repository paths:
+
+- Extension scaffold: `browser/extension/`
+- Native host scaffold: `browser/native-host/`
+
+Local build/install:
+
+```bash
+browser/extension/scripts/build.sh
+browser/native-host/scripts/install.sh
+```
+
+For Chromium-family browsers, install native host with extension ID:
+
+```bash
+browser/native-host/scripts/install.sh --chromium-origin <EXTENSION_ID>
+```
+
+---
+
+## Packager Notes (Arch/AUR)
+
+If packaging browser bridge support, include:
+
+- `browser/native-host/stasis_native_host.py`
+- `browser/native-host/manifests/*.template`
+- `browser/native-host/scripts/install.sh`
+
+Recommended post-install guidance:
+
+- User loads extension (Firefox/Chromium artifact from `browser/extension/dist`).
+- User runs native host installer script once (with Chromium extension ID when needed).
+- User restarts browser after manifest install.
 
 ---
 

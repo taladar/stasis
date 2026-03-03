@@ -1,3 +1,6 @@
+// Author: Dustin Pilgrim
+// License: MIT
+
 use crate::core::{
     config::{Config, Pattern, PlanStepKind},
     state::State,
@@ -48,13 +51,22 @@ fn render_status(state: &State, cfg_opt: Option<&Config>, now_ms: u64) -> String
     match paused_reason {
         Some("locked") => out.push_str("State: locked\n"),
         Some(r) => out.push_str(&format!("State: inhibited ({r})\n")),
-        None => out.push_str("State: active\n"),
+        None => {
+            if state.debounce_pending() {
+                out.push_str("State: waiting for idle\n");
+            } else {
+                out.push_str("State: active\n");
+            }
+        }
     }
 
     let app = state.app_inhibitor_count();
     let media = state.media_inhibitor_count();
 
-    out.push_str(&format!("Manual Pause: {}\n", yesno(state.manually_paused())));
+    out.push_str(&format!(
+        "Manual Pause: {}\n",
+        yesno(state.manually_paused())
+    ));
     out.push_str(&format!("Paused: {}\n", yesno(state.paused())));
     out.push_str(&format!("Apps Inhibiting: {}\n", app));
     out.push_str(&format!("Media Players Playing: {}\n", media));
@@ -85,6 +97,8 @@ fn render_tooltip_compact(state: &State, cfg_opt: Option<&Config>, now_ms: u64) 
         t.push_str("State: inhibited (system)\n");
     } else if state.inhibitors_active() {
         t.push_str("State: inhibited (inhibitors)\n");
+    } else if state.debounce_pending() {
+        t.push_str("State: waiting for idle\n");
     } else {
         t.push_str("State: active\n");
     }
@@ -93,7 +107,10 @@ fn render_tooltip_compact(state: &State, cfg_opt: Option<&Config>, now_ms: u64) 
     let media = state.media_inhibitor_count();
 
     // Keep tooltip compact but consistent.
-    t.push_str(&format!("Manual Pause: {}\n", yesno(state.manually_paused())));
+    t.push_str(&format!(
+        "Manual Pause: {}\n",
+        yesno(state.manually_paused())
+    ));
     t.push_str(&format!("Paused: {}\n", yesno(state.paused())));
     t.push_str(&format!("Apps Inhibiting: {}\n", app));
     t.push_str(&format!("Media Players Playing: {}\n", media));
@@ -259,6 +276,21 @@ fn step_enabled(cfg: &Config, idx: usize) -> bool {
 }
 
 fn next_step_line(cfg: &Config, state: &State, now_ms: u64) -> Option<String> {
+    // 1) If paused, Next should ONLY be "paused for Xs" (no due calculations).
+    if state.paused() {
+        if let Some(t0) = state.pause_started_ms() {
+            let s = now_ms.saturating_sub(t0) / 1000;
+            return Some(format!("Next: paused for {s}s"));
+        }
+        return Some("Next: paused".to_string());
+    }
+
+    // 2) If waiting (debounce pending), Next should ONLY be "waiting for idle".
+    if state.debounce_pending() {
+        return Some("Next: waiting for idle".to_string());
+    }
+
+    // Otherwise show computed next step timing as before.
     let mut idx = state.step_index();
     while idx < cfg.plan.len() && !step_enabled(cfg, idx) {
         idx += 1;

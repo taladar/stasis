@@ -195,14 +195,16 @@ impl AppInhibitService {
                         Ok(Err(e)) => {
                             eventline::warn!(
                                 "app_inhibit: hyprland query failed (keeping previous count={}): {}",
-                                prev_count, e
+                                prev_count,
+                                e
                             );
                             prev_count
                         }
                         Err(e) => {
                             eventline::warn!(
                                 "app_inhibit: hyprland task panicked (keeping previous count={}): {}",
-                                prev_count, e
+                                prev_count,
+                                e
                             );
                             prev_count
                         }
@@ -224,14 +226,16 @@ impl AppInhibitService {
                         Ok(Err(e)) => {
                             eventline::warn!(
                                 "app_inhibit: niri query failed (keeping previous count={}): {}",
-                                prev_count, e
+                                prev_count,
+                                e
                             );
                             prev_count
                         }
                         Err(e) => {
                             eventline::warn!(
                                 "app_inhibit: niri task panicked (keeping previous count={}): {}",
-                                prev_count, e
+                                prev_count,
+                                e
                             );
                             prev_count
                         }
@@ -253,7 +257,8 @@ impl AppInhibitService {
                         Err(e) => {
                             eventline::warn!(
                                 "app_inhibit: proc task panicked (keeping previous count={}): {}",
-                                prev_count, e
+                                prev_count,
+                                e
                             );
                             prev_count
                         }

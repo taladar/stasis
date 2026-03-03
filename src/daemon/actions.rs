@@ -1,11 +1,11 @@
 // Author: Dustin Pilgrim
 // License: MIT
 
+use super::{AnyError, Daemon};
 use crate::core::{action::Action, events::Event, manager_msg::ManagerMsg};
+use std::process::Stdio;
 use tokio::process::Command;
 use tokio::sync::mpsc;
-use std::process::Stdio;
-use super::{AnyError, Daemon};
 
 impl Daemon {
     pub(super) async fn exec_action_with_tx(

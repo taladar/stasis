@@ -16,8 +16,10 @@ impl Manager {
 
         let alt = if state.manually_paused() {
             "manually_inhibited"
-        } else if state.inhibitors_active() || state.system_paused() {
+        } else if state.inhibitors_active() || state.system_paused() || state.is_locked() {
             "idle_inhibited"
+        } else if state.debounce_pending() {
+            "idle_waiting"
         } else {
             "idle_active"
         };

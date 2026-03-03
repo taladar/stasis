@@ -192,7 +192,11 @@ fn parse_duration(s: &str) -> Result<Duration, String> {
             "m" => n * 60 * 1000,
             "h" => n * 60 * 60 * 1000,
             "d" => n * 24 * 60 * 60 * 1000,
-            _ => return Err(format!("Duration format: unknown unit '{unit}' (ms/s/m/h/d)")),
+            _ => {
+                return Err(format!(
+                    "Duration format: unknown unit '{unit}' (ms/s/m/h/d)"
+                ));
+            }
         };
 
         total_ms = total_ms
@@ -228,7 +232,9 @@ fn parse_until_local_time(s: &str) -> Result<Duration, String> {
 
     let (hour, min) = if let Some((hh, mm)) = t.split_once(':') {
         let h: i32 = hh.parse().map_err(|_| "Invalid time (hour)".to_string())?;
-        let m: i32 = mm.parse().map_err(|_| "Invalid time (minute)".to_string())?;
+        let m: i32 = mm
+            .parse()
+            .map_err(|_| "Invalid time (minute)".to_string())?;
         (h, m)
     } else {
         // "1pm" style

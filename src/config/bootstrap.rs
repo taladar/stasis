@@ -7,7 +7,7 @@
 use std::fs;
 use std::io;
 
-use crate::core::utils::{detect_chassis, ChassisKind};
+use crate::core::utils::{ChassisKind, detect_chassis};
 
 pub fn ensure_user_config_exists() -> io::Result<()> {
     let path = super::default_user_config_path();

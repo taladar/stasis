@@ -267,36 +267,66 @@ fn parse_old(text: &str) -> Result<OldFile, String> {
         let cur = ctx.last().cloned();
 
         match cur {
-            Some(Ctx::Stasis) => f.stasis.globals.push(Line { key: k, raw_value: v }),
-            Some(Ctx::Profiles) => f.globals.push(Line { key: k, raw_value: v }),
+            Some(Ctx::Stasis) => f.stasis.globals.push(Line {
+                key: k,
+                raw_value: v,
+            }),
+            Some(Ctx::Profiles) => f.globals.push(Line {
+                key: k,
+                raw_value: v,
+            }),
             Some(Ctx::Profile) => {
                 let p = f.profiles.last_mut().ok_or("profile missing")?;
-                p.lines.push(Line { key: k, raw_value: v });
+                p.lines.push(Line {
+                    key: k,
+                    raw_value: v,
+                });
             }
-            Some(Ctx::OnAc) => f.stasis.globals.push(Line { key: k, raw_value: v }), // ignore
-            Some(Ctx::OnBattery) => f.stasis.globals.push(Line { key: k, raw_value: v }), // ignore
+            Some(Ctx::OnAc) => f.stasis.globals.push(Line {
+                key: k,
+                raw_value: v,
+            }), // ignore
+            Some(Ctx::OnBattery) => f.stasis.globals.push(Line {
+                key: k,
+                raw_value: v,
+            }), // ignore
             Some(Ctx::Block { where_ }) => match where_ {
                 BlockWhere::StasisDesktop => {
                     let b = f.stasis.blocks.last_mut().ok_or("block missing")?;
-                    b.lines.push(Line { key: k, raw_value: v });
+                    b.lines.push(Line {
+                        key: k,
+                        raw_value: v,
+                    });
                 }
                 BlockWhere::StasisAc => {
                     let b = f.stasis.on_ac.last_mut().ok_or("block missing")?;
-                    b.lines.push(Line { key: k, raw_value: v });
+                    b.lines.push(Line {
+                        key: k,
+                        raw_value: v,
+                    });
                 }
                 BlockWhere::StasisBattery => {
                     let b = f.stasis.on_battery.last_mut().ok_or("block missing")?;
-                    b.lines.push(Line { key: k, raw_value: v });
+                    b.lines.push(Line {
+                        key: k,
+                        raw_value: v,
+                    });
                 }
                 BlockWhere::Profile => {
                     let p = f.profiles.last_mut().ok_or("profile missing")?;
                     let b = p.blocks.last_mut().ok_or("profile block missing")?;
-                    b.lines.push(Line { key: k, raw_value: v });
+                    b.lines.push(Line {
+                        key: k,
+                        raw_value: v,
+                    });
                 }
             },
             None => {
                 // top-level non-block kv; keep as meta-ish
-                f.globals.push(Line { key: k, raw_value: v });
+                f.globals.push(Line {
+                    key: k,
+                    raw_value: v,
+                });
             }
         }
     }
@@ -349,8 +379,7 @@ fn old_wants_loginctl(old: &OldFile) -> bool {
 
         for l in &b.lines {
             if l.key == "use_loginctl"
-                && l.raw_value.trim().split_whitespace().next()
-                    == Some("true")
+                && l.raw_value.trim().split_whitespace().next() == Some("true")
             {
                 return true;
             }
@@ -473,7 +502,13 @@ fn emit_globals(out: &mut String, lines: &[Line], indent: usize) {
         let key = key.replace('-', "_");
 
         // old had `resume-command` etc inside blocks; globals rarely have those.
-        out.push_str(&format!("{:indent$}{} {}\n", "", key, l.raw_value, indent = indent));
+        out.push_str(&format!(
+            "{:indent$}{} {}\n",
+            "",
+            key,
+            l.raw_value,
+            indent = indent
+        ));
     }
 }
 
@@ -518,7 +553,12 @@ fn emit_block(out: &mut String, b: &OldBlock, indent: usize) {
     }
 
     if let Some(t) = timeout {
-        out.push_str(&format!("{:indent2$}timeout {}\n", "", t, indent2 = indent + 2));
+        out.push_str(&format!(
+            "{:indent2$}timeout {}\n",
+            "",
+            t,
+            indent2 = indent + 2
+        ));
     }
 
     // Lock special case:
@@ -547,10 +587,20 @@ fn emit_block(out: &mut String, b: &OldBlock, indent: usize) {
                 ));
             }
         } else if let Some(c) = command {
-            out.push_str(&format!("{:indent2$}command {}\n", "", c, indent2 = indent + 2));
+            out.push_str(&format!(
+                "{:indent2$}command {}\n",
+                "",
+                c,
+                indent2 = indent + 2
+            ));
         }
     } else if let Some(c) = command {
-        out.push_str(&format!("{:indent2$}command {}\n", "", c, indent2 = indent + 2));
+        out.push_str(&format!(
+            "{:indent2$}command {}\n",
+            "",
+            c,
+            indent2 = indent + 2
+        ));
     }
 
     if let Some(rc) = resume_command {
@@ -563,7 +613,12 @@ fn emit_block(out: &mut String, b: &OldBlock, indent: usize) {
     }
 
     if let Some(n) = notification {
-        out.push_str(&format!("{:indent2$}notification {}\n", "", n, indent2 = indent + 2));
+        out.push_str(&format!(
+            "{:indent2$}notification {}\n",
+            "",
+            n,
+            indent2 = indent + 2
+        ));
     }
     if let Some(ns) = notify_seconds_before {
         out.push_str(&format!(

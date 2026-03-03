@@ -33,7 +33,10 @@ pub async fn handle_list(args: &str, tx: &mpsc::Sender<ManagerMsg>) -> String {
     let (reply_tx, reply_rx) = oneshot::channel();
 
     if tx
-        .send(ManagerMsg::List { kind, reply: reply_tx })
+        .send(ManagerMsg::List {
+            kind,
+            reply: reply_tx,
+        })
         .await
         .is_err()
     {

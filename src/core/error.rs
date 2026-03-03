@@ -50,10 +50,8 @@ impl fmt::Display for Error {
 impl fmt::Display for ConfigError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ConfigError::ProfileNotFound =>
-                write!(f, "profile not found"),
-            ConfigError::InvalidProfileName =>
-                write!(f, "invalid profile name"),
+            ConfigError::ProfileNotFound => write!(f, "profile not found"),
+            ConfigError::InvalidProfileName => write!(f, "invalid profile name"),
         }
     }
 }
@@ -61,10 +59,8 @@ impl fmt::Display for ConfigError {
 impl fmt::Display for StateError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            StateError::AlreadyPaused =>
-                write!(f, "already paused"),
-            StateError::NotPaused =>
-                write!(f, "not paused"),
+            StateError::AlreadyPaused => write!(f, "already paused"),
+            StateError::NotPaused => write!(f, "not paused"),
         }
     }
 }

@@ -60,6 +60,7 @@ pub struct State {
     // Timing (ms since epoch, supplied by Tick/UserActivity/etc.)
     last_activity_ms: u64,
     last_action_ms: u64,
+    browser_activity_until_ms: u64,
 
     // Sequential plan machine:
     step_index: usize,
@@ -113,6 +114,7 @@ impl State {
 
             last_activity_ms: now_ms,
             last_action_ms: now_ms,
+            browser_activity_until_ms: 0,
 
             step_index: 0,
             step_base_ms: now_ms,
@@ -244,7 +246,10 @@ impl State {
         if self.last_dpms_fired_idx.is_some_and(|i| i >= start_idx) {
             self.last_dpms_fired_idx = None;
         }
-        if self.last_brightness_fired_idx.is_some_and(|i| i >= start_idx) {
+        if self
+            .last_brightness_fired_idx
+            .is_some_and(|i| i >= start_idx)
+        {
             self.last_brightness_fired_idx = None;
         }
         if self.last_lock_fired_idx.is_some_and(|i| i >= start_idx) {
@@ -345,6 +350,10 @@ impl State {
         self.debounce_pending
     }
 
+    pub fn pause_started_ms(&self) -> Option<u64> {
+        self.pause_started_ms
+    }
+
     // ---------------- setters ----------------
 
     pub fn set_app_inhibitor_count(&mut self, count: u64) {
@@ -393,6 +402,18 @@ impl State {
 
     pub fn mark_action_fired(&mut self, now_ms: u64) {
         self.last_action_ms = now_ms;
+    }
+
+    pub fn note_browser_activity(&mut self, now_ms: u64, hold_ms: u64) {
+        self.browser_activity_until_ms = now_ms.saturating_add(hold_ms);
+    }
+
+    pub fn clear_browser_activity(&mut self) {
+        self.browser_activity_until_ms = 0;
+    }
+
+    pub fn browser_activity_active(&self, now_ms: u64) -> bool {
+        now_ms <= self.browser_activity_until_ms
     }
 
     pub fn set_step_index(&mut self, v: usize) {

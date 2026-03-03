@@ -6,8 +6,8 @@ mod info;
 mod list;
 mod snapshot;
 
-use crate::core::events::MediaState;
 use crate::core::config::ConfigFile;
+use crate::core::events::MediaState;
 
 #[derive(Debug, Clone)]
 pub struct Manager {

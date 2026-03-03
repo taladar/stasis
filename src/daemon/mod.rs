@@ -6,7 +6,7 @@ mod run;
 
 use crate::core::{
     action::Action,
-    config::{ConfigFile, PlanSource, Pattern},
+    config::{ConfigFile, Pattern, PlanSource},
     events::{Event, PowerState},
     manager::Manager,
     manager_msg::ManagerMsg,

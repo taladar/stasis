@@ -2,8 +2,8 @@
 // License: MIT
 
 use crate::daemon::Daemon;
-use eventline::{FileSetup, RunHeader, Setup};
 use eventline::journal::rotation::LogPolicy;
+use eventline::{FileSetup, RunHeader, Setup};
 use std::path::PathBuf;
 
 use crate::cli::Args;

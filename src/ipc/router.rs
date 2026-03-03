@@ -3,7 +3,7 @@
 
 use tokio::{
     sync::{mpsc, oneshot},
-    time::{timeout, Duration},
+    time::{Duration, timeout},
 };
 
 use crate::core::manager_msg::ManagerMsg;
@@ -23,7 +23,11 @@ pub async fn route_command(cmd: &str, tx: &mpsc::Sender<ManagerMsg>) -> String {
         let (reply_tx, reply_rx) = oneshot::channel();
 
         // If the manager loop is gone / channel closed, daemon is *effectively* not running.
-        if tx.send(ManagerMsg::GetInfo { reply: reply_tx }).await.is_err() {
+        if tx
+            .send(ManagerMsg::GetInfo { reply: reply_tx })
+            .await
+            .is_err()
+        {
             return if as_json {
                 r#"{"text":"","alt":"not_running","class":"not_running","tooltip":"Stasis not running","profile":null}"#
                     .to_string()
@@ -97,6 +101,16 @@ pub async fn route_command(cmd: &str, tx: &mpsc::Sender<ManagerMsg>) -> String {
     if cmd == "trigger" || cmd.starts_with("trigger ") {
         let args = cmd.strip_prefix("trigger").unwrap_or("").trim();
         return crate::ipc::handlers::trigger::handle_trigger(args, tx).await;
+    }
+
+    // ---------------- browser-activity ----------------
+    if cmd == "browser-activity" {
+        return crate::ipc::handlers::browser_activity::handle_browser_activity(tx).await;
+    }
+
+    // ---------------- browser-inactive ----------------
+    if cmd == "browser-inactive" {
+        return crate::ipc::handlers::browser_inactive::handle_browser_inactive(tx).await;
     }
 
     // ---------------- dump ----------------

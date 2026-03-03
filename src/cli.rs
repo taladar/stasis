@@ -51,9 +51,10 @@ pub enum Command {
     },
 
     #[command(about = "Manually trigger an idle action by name")]
-    Trigger {
-        step: String,
-    },
+    Trigger { step: String },
+
+    #[command(about = "Send a browser activity pulse to keep idle in waiting state")]
+    BrowserActivity,
 
     #[command(about = "Toggle manual idle inhibition")]
     ToggleInhibit,
@@ -73,7 +74,10 @@ pub enum Command {
         args: Vec<String>,
     },
 
-    #[command(about = "Switch profile or return to base config", disable_help_flag = true)]
+    #[command(
+        about = "Switch profile or return to base config",
+        disable_help_flag = true
+    )]
     Profile {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,

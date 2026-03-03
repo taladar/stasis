@@ -10,23 +10,21 @@ pub async fn run(args: Args) -> Result<(), AnyError> {
     let cmd = args.command.as_ref().expect("command mode");
 
     match cmd {
-        Command::Reload => {
-            match crate::ipc::client::send_raw("reload").await {
-                Ok(resp) => {
-                    let out = resp.trim_end();
-                    if out.is_empty() {
-                        println!("Configuration reloaded");
-                    } else {
-                        println!("{out}");
-                    }
-                    Ok(())
+        Command::Reload => match crate::ipc::client::send_raw("reload").await {
+            Ok(resp) => {
+                let out = resp.trim_end();
+                if out.is_empty() {
+                    println!("Configuration reloaded");
+                } else {
+                    println!("{out}");
                 }
-                Err(e) => {
-                    eprintln!("stasis: {e}");
-                    Ok(())
-                }
+                Ok(())
             }
-        }
+            Err(e) => {
+                eprintln!("stasis: {e}");
+                Ok(())
+            }
+        },
 
         Command::Pause { args: pause_args } => {
             let mut msg = String::from("pause");
@@ -52,41 +50,37 @@ pub async fn run(args: Args) -> Result<(), AnyError> {
             }
         }
 
-        Command::Resume => {
-            match crate::ipc::client::send_raw("resume").await {
-                Ok(resp) => {
-                    let out = resp.trim_end();
-                    if out.is_empty() {
-                        println!("Idle timers resumed");
-                    } else {
-                        println!("{out}");
-                    }
-                    Ok(())
+        Command::Resume => match crate::ipc::client::send_raw("resume").await {
+            Ok(resp) => {
+                let out = resp.trim_end();
+                if out.is_empty() {
+                    println!("Idle timers resumed");
+                } else {
+                    println!("{out}");
                 }
-                Err(e) => {
-                    eprintln!("stasis: {e}");
-                    Ok(())
-                }
+                Ok(())
             }
-        }
+            Err(e) => {
+                eprintln!("stasis: {e}");
+                Ok(())
+            }
+        },
 
-        Command::ToggleInhibit => {
-            match crate::ipc::client::send_raw("toggle-inhibit").await {
-                Ok(resp) => {
-                    let out = resp.trim_end();
-                    if out.is_empty() {
-                        println!("Toggled idle inhibition");
-                    } else {
-                        println!("{out}");
-                    }
-                    Ok(())
+        Command::ToggleInhibit => match crate::ipc::client::send_raw("toggle-inhibit").await {
+            Ok(resp) => {
+                let out = resp.trim_end();
+                if out.is_empty() {
+                    println!("Toggled idle inhibition");
+                } else {
+                    println!("{out}");
                 }
-                Err(e) => {
-                    eprintln!("stasis: {e}");
-                    Ok(())
-                }
+                Ok(())
             }
-        }
+            Err(e) => {
+                eprintln!("stasis: {e}");
+                Ok(())
+            }
+        },
 
         Command::Trigger { step } => {
             let msg = format!("trigger {}", step);
@@ -107,6 +101,22 @@ pub async fn run(args: Args) -> Result<(), AnyError> {
                 }
             }
         }
+
+        Command::BrowserActivity => match crate::ipc::client::send_raw("browser-activity").await {
+            Ok(resp) => {
+                let out = resp.trim_end();
+                if out.is_empty() {
+                    println!("OK");
+                } else {
+                    println!("{out}");
+                }
+                Ok(())
+            }
+            Err(e) => {
+                eprintln!("stasis: {e}");
+                Ok(())
+            }
+        },
 
         Command::Info { json } => {
             let msg = if *json { "info --json" } else { "info" };
@@ -197,22 +207,20 @@ pub async fn run(args: Args) -> Result<(), AnyError> {
             }
         }
 
-        Command::Stop => {
-            match crate::ipc::client::send_raw("stop").await {
-                Ok(resp) => {
-                    let out = resp.trim_end();
-                    if out.is_empty() {
-                        println!("Stopping Stasis daemon");
-                    } else {
-                        println!("{out}");
-                    }
-                    Ok(())
+        Command::Stop => match crate::ipc::client::send_raw("stop").await {
+            Ok(resp) => {
+                let out = resp.trim_end();
+                if out.is_empty() {
+                    println!("Stopping Stasis daemon");
+                } else {
+                    println!("{out}");
                 }
-                Err(e) => {
-                    eprintln!("stasis: {e}");
-                    Ok(())
-                }
+                Ok(())
             }
-        }
+            Err(e) => {
+                eprintln!("stasis: {e}");
+                Ok(())
+            }
+        },
     }
 }

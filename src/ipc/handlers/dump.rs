@@ -27,10 +27,7 @@ pub async fn handle_dump(args: &str) -> String {
     let data = match tokio::fs::read_to_string(&path).await {
         Ok(s) => s,
         Err(e) => {
-            return format!(
-                "ERROR: failed to read log {}: {e}",
-                path.display()
-            );
+            return format!("ERROR: failed to read log {}: {e}", path.display());
         }
     };
 
@@ -104,4 +101,3 @@ fn log_path() -> Option<PathBuf> {
 
     Some(base.join("stasis").join("stasis.log"))
 }
-

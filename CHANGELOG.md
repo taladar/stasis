@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Browser handling policy (migration)**
+  - Browser detection now uses an explicit extension/native-host bridge for reliable behavior.
+  - Browser signals are treated as waiting-for-idle activity (`browser-activity` / `browser-inactive`) rather than media inhibitor counters.
+  - Built-in browser idle-inhibitor probing paths were removed/reduced where inconsistent.
+
+- **Media service scope tightened**
+  - `media.rs` now focuses on non-browser media detection.
+  - Browser media is handled by explicit extension pulses instead of compositor/browser heuristics.
+
+- **Manager timing polish for browser pulses**
+  - Added browser activity hold window behavior with explicit inactive edge handling.
+  - Reduced hold window to improve responsiveness and reduce transient wait blips.
+
+- **Config parser naming cleanup**
+  - Removed misleading `legacy_*` naming in plan parse internals where behavior is not legacy-only.
+
 - `media.rs`: replaced `sh -lc pactl` invocation with a direct `pactl` call, removing the unnecessary shell wrapper.
 
 - **media: complete overhaul of sink-input and source-output detection**

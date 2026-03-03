@@ -78,34 +78,34 @@ async fn run_dbus(
         )
         .await
         {
-            Ok(proxy) => {
-                match proxy.receive_signal("PrepareForSleep").await {
-                    Ok(mut stream) => {
-                        let sink = sink.clone();
-                        tokio::spawn(async move {
-                            while let Some(sig) = stream.next().await {
-                                let going_down: bool = match sig.body().deserialize() {
-                                    Ok(v) => v,
-                                    Err(_) => continue,
-                                };
-                                let t = now_ms();
-                                sink.push(if going_down {
-                                    Event::PrepareForSleep { now_ms: t }
-                                } else {
-                                    Event::ResumedFromSleep { now_ms: t }
-                                });
-                            }
-                        });
-                    }
-                    Err(e) => {
-                        eventline::warn!("D-Bus: could not subscribe to PrepareForSleep: {e:?}");
-                    }
+            Ok(proxy) => match proxy.receive_signal("PrepareForSleep").await {
+                Ok(mut stream) => {
+                    let sink = sink.clone();
+                    tokio::spawn(async move {
+                        while let Some(sig) = stream.next().await {
+                            let going_down: bool = match sig.body().deserialize() {
+                                Ok(v) => v,
+                                Err(_) => continue,
+                            };
+                            let t = now_ms();
+                            sink.push(if going_down {
+                                Event::PrepareForSleep { now_ms: t }
+                            } else {
+                                Event::ResumedFromSleep { now_ms: t }
+                            });
+                        }
+                    });
                 }
-            }
+                Err(e) => {
+                    eventline::warn!("D-Bus: could not subscribe to PrepareForSleep: {e:?}");
+                }
+            },
             Err(e) => {
                 // Do NOT fall back to a different proxy — PrepareForSleep monitoring
                 // is simply unavailable. Log and continue; lid/lock events may still work.
-                eventline::warn!("D-Bus: login1 Manager proxy unavailable: {e:?}; sleep/wake monitoring disabled");
+                eventline::warn!(
+                    "D-Bus: login1 Manager proxy unavailable: {e:?}; sleep/wake monitoring disabled"
+                );
             }
         }
 
@@ -156,9 +156,7 @@ async fn run_dbus(
                 }
             }
             Err(e) => {
-                eventline::warn!(
-                    "D-Bus: could not resolve session path for lock/unlock: {e:?}"
-                );
+                eventline::warn!("D-Bus: could not resolve session path for lock/unlock: {e:?}");
             }
         }
     } else {
@@ -184,11 +182,11 @@ async fn run_dbus(
                 let Ok(msg) = msg else { continue };
 
                 let body = msg.body();
-                let parsed: (String, HashMap<String, Value>, Vec<String>) =
-                    match body.deserialize() {
-                        Ok(v) => v,
-                        Err(_) => continue,
-                    };
+                let parsed: (String, HashMap<String, Value>, Vec<String>) = match body.deserialize()
+                {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
 
                 let (iface, changed, _invalidated) = parsed;
 
@@ -292,7 +290,6 @@ async fn get_current_session_path(
     // 4) Last-resort: PID method. Note: this will fail for processes running
     // outside a logind session (e.g. systemd --user services on some compositors).
     let pid = std::process::id();
-    let path: zbus::zvariant::OwnedObjectPath =
-        proxy.call("GetSessionByPID", &(pid,)).await?;
+    let path: zbus::zvariant::OwnedObjectPath = proxy.call("GetSessionByPID", &(pid,)).await?;
     Ok(path)
 }

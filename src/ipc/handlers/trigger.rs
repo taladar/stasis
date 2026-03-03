@@ -31,11 +31,7 @@ Notes:
 pub async fn handle_trigger(args: &str, tx: &mpsc::Sender<ManagerMsg>) -> String {
     let args = args.trim();
 
-    if args.is_empty()
-        || args.eq_ignore_ascii_case("help")
-        || args == "-h"
-        || args == "--help"
-    {
+    if args.is_empty() || args.eq_ignore_ascii_case("help") || args == "-h" || args == "--help" {
         if args.is_empty() {
             return format!("ERROR: missing step name\n\n{TRIGGER_HELP_MESSAGE}");
         }

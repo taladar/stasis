@@ -2,7 +2,7 @@
 // License: MIT
 
 use tokio::sync::mpsc::Sender;
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
 
 use crate::core::events::{Event, PowerState};
 use crate::core::manager_msg::ManagerMsg;
