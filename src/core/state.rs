@@ -85,7 +85,7 @@ pub struct State {
     resume_epoch: u64,
     resumed_epoch: u64,
 
-    // NEW: if we resumed while locked (dpms/brightness), defer the remainder until unlock.
+    // If we resumed while locked (dpms/brightness), defer the remainder until unlock.
     resume_deferred_until_unlock: bool,
 
     // Lifetime one-shots (instant steps with timeout=0)
@@ -106,7 +106,7 @@ impl State {
             debounce_pending: true, // boot behaves like "fresh idle cycle"
 
             is_locked: false,
-            // IMPORTANT: default is represented by None (profile selection is IPC-only).
+            // Default profile is represented by None (profile selection is IPC-only).
             active_profile: None,
 
             power_state: None,

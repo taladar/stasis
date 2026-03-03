@@ -47,7 +47,7 @@ fn default_laptop_config() -> String {
 @author "Dustin Pilgrim"
 @description "Lightweight feature packed idle manager for Wayland"
 
-# IMPORTANT (new semantics):
+# Semantics:
 # - Everything lives under `default:` (and optional profile blocks).
 # - On laptops, Stasis chooses between:
 #     `default.ac:` and `default.battery:`
@@ -63,7 +63,7 @@ default:
 
   # Optional: run before suspending (hook).
   #
-  # IMPORTANT:
+  # Behavior:
   # - This command runs RIGHT BEFORE the suspend step, and Stasis currently WAITS
   #   for it to exit before continuing to suspend.
   # - Therefore, a foreground screen locker (e.g. `swaylock -F`, `hyprlock`) will
