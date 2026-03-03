@@ -1,2 +1,8 @@
 /target
 /result
+
+# Browser bridge generated artifacts
+/browser/extension/.build-tmp/
+/browser/extension/dist/
+/browser/native-host/__pycache__/
+*.pyc
