@@ -7,7 +7,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use futures::StreamExt;
 use tokio::sync::{Mutex, watch};
-use tokio::time::{self, Duration, MissedTickBehavior};
 use zbus::{Connection, MatchRule, Proxy};
 
 use crate::core::events::Event;
@@ -72,8 +71,8 @@ struct DbusInhibitTracker {
 struct SenderInhibitState {
     // Legacy ScreenSaver / SessionManager inhibitor state.
     legacy_active: bool,
-    // Last seen portal Inhibit/CreateMonitor heartbeat from this sender.
-    portal_last_seen_ms: Option<u64>,
+    // Portal Inhibit state for this sender.
+    portal_active: bool,
 }
 
 impl DbusInhibitTracker {
@@ -89,7 +88,7 @@ impl DbusInhibitTracker {
     fn clear_legacy(&mut self, sender: &str) {
         let should_remove = if let Some(state) = self.active_senders.get_mut(sender) {
             state.legacy_active = false;
-            state.portal_last_seen_ms.is_none()
+            !state.portal_active
         } else {
             false
         };
@@ -99,14 +98,14 @@ impl DbusInhibitTracker {
         }
     }
 
-    fn mark_portal_seen(&mut self, sender: &str, now_ms: u64) {
+    fn mark_portal_active(&mut self, sender: &str) {
         let state = self.active_senders.entry(sender.to_string()).or_default();
-        state.portal_last_seen_ms = Some(now_ms);
+        state.portal_active = true;
     }
 
     fn clear_portal(&mut self, sender: &str) {
         let should_remove = if let Some(state) = self.active_senders.get_mut(sender) {
-            state.portal_last_seen_ms = None;
+            state.portal_active = false;
             !state.legacy_active
         } else {
             false
@@ -119,17 +118,6 @@ impl DbusInhibitTracker {
 
     fn remove_sender(&mut self, sender: &str) {
         self.active_senders.remove(sender);
-    }
-
-    fn expire_stale_portal(&mut self, now_ms: u64, stale_ms: u64) {
-        self.active_senders.retain(|_, state| {
-            if let Some(last_seen) = state.portal_last_seen_ms {
-                if now_ms.saturating_sub(last_seen) >= stale_ms {
-                    state.portal_last_seen_ms = None;
-                }
-            }
-            state.legacy_active || state.portal_last_seen_ms.is_some()
-        });
     }
 }
 
@@ -171,15 +159,14 @@ async fn tracker_clear_legacy(
     }
 }
 
-async fn tracker_mark_portal_seen(
+async fn tracker_mark_portal_active(
     tracker: &Arc<Mutex<DbusInhibitTracker>>,
     sink: &Arc<dyn EventSink>,
     sender: &str,
 ) {
-    let now = now_ms();
     let mut t = tracker.lock().await;
     let old_total = t.total();
-    t.mark_portal_seen(sender, now);
+    t.mark_portal_active(sender);
     let new_total = t.total();
     drop(t);
 
@@ -189,7 +176,7 @@ async fn tracker_mark_portal_seen(
             sender,
             new_total
         );
-        sink.push(Event::BrowserActivity { now_ms: now });
+        sink.push(Event::BrowserActivity { now_ms: now_ms() });
     }
 }
 
@@ -207,24 +194,6 @@ async fn tracker_clear_portal(
     if old_total > 0 && new_total == 0 {
         eventline::debug!("dbus: inhibit cleared (portal sender={})", sender);
         sink.push(Event::BrowserInactive { now_ms: now_ms() });
-    }
-}
-
-async fn tracker_expire_portal(
-    tracker: &Arc<Mutex<DbusInhibitTracker>>,
-    sink: &Arc<dyn EventSink>,
-    stale_ms: u64,
-) {
-    let now = now_ms();
-    let mut t = tracker.lock().await;
-    let old_total = t.total();
-    t.expire_stale_portal(now, stale_ms);
-    let new_total = t.total();
-    drop(t);
-
-    if old_total > 0 && new_total == 0 {
-        eventline::debug!("dbus: inhibit expired (stale_ms={})", stale_ms);
-        sink.push(Event::BrowserInactive { now_ms: now });
     }
 }
 
@@ -246,9 +215,6 @@ async fn tracker_remove_sender(
 }
 
 async fn spawn_dbus_inhibit_monitor(sink: Arc<dyn EventSink>) -> zbus::Result<()> {
-    const PORTAL_STALE_MS: u64 = 90_000;
-    const PORTAL_SWEEP_MS: u64 = 5_000;
-
     let monitor = Connection::session().await?;
     monitor
         .call_method(
@@ -262,17 +228,6 @@ async fn spawn_dbus_inhibit_monitor(sink: Arc<dyn EventSink>) -> zbus::Result<()
 
     let tracker = Arc::new(Mutex::new(DbusInhibitTracker::default()));
     eventline::debug!("dbus: inhibit monitor started (session bus)");
-
-    let cleanup_sink = sink.clone();
-    let cleanup_tracker = tracker.clone();
-    tokio::spawn(async move {
-        let mut interval = time::interval(Duration::from_millis(PORTAL_SWEEP_MS));
-        interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
-        loop {
-            interval.tick().await;
-            tracker_expire_portal(&cleanup_tracker, &cleanup_sink, PORTAL_STALE_MS).await;
-        }
-    });
 
     let mut stream = zbus::MessageStream::from(monitor);
     tokio::spawn(async move {
@@ -316,12 +271,12 @@ async fn spawn_dbus_inhibit_monitor(sink: Arc<dyn EventSink>) -> zbus::Result<()
                         continue;
                     }
 
-                    // Portal inhibit paths used by wlroots/xdg-desktop-portal stacks.
-                    let portal_inhibit_call = iface == "org.freedesktop.portal.inhibit"
-                        && (member == "inhibit" || member == "createmonitor");
+                    // Portal idle inhibit.
+                    let portal_inhibit_call =
+                        iface == "org.freedesktop.portal.inhibit" && member == "inhibit";
 
                     if portal_inhibit_call {
-                        tracker_mark_portal_seen(&tracker, &sink, &sender).await;
+                        tracker_mark_portal_active(&tracker, &sink, &sender).await;
                         continue;
                     }
 
@@ -614,4 +569,35 @@ async fn get_current_session_path(
     let pid = std::process::id();
     let path: zbus::zvariant::OwnedObjectPath = proxy.call("GetSessionByPID", &(pid,)).await?;
     Ok(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DbusInhibitTracker;
+
+    #[test]
+    fn portal_inhibit_stays_active_until_explicit_clear() {
+        let mut tracker = DbusInhibitTracker::default();
+        tracker.mark_portal_active(":1.26");
+        assert_eq!(tracker.total(), 1);
+
+        // Repeated Inhibit calls from same sender should remain a single active sender.
+        tracker.mark_portal_active(":1.26");
+        assert_eq!(tracker.total(), 1);
+    }
+
+    #[test]
+    fn sender_removed_when_both_legacy_and_portal_clear() {
+        let mut tracker = DbusInhibitTracker::default();
+
+        tracker.mark_legacy_active(":1.99");
+        tracker.mark_portal_active(":1.99");
+        assert_eq!(tracker.total(), 1);
+
+        tracker.clear_portal(":1.99");
+        assert_eq!(tracker.total(), 1);
+
+        tracker.clear_legacy(":1.99");
+        assert_eq!(tracker.total(), 0);
+    }
 }

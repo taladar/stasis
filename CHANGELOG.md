@@ -13,10 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Stasis now monitors session-bus inhibit method calls again:
     - `org.freedesktop.ScreenSaver` `Inhibit` / `UnInhibit`
     - `org.gnome.SessionManager` `Inhibit` / `Uninhibit`
-    - `org.freedesktop.portal.Inhibit` `Inhibit` / `CreateMonitor`
+    - `org.freedesktop.portal.Inhibit` `Inhibit`
     - release via `org.freedesktop.portal.Request.Close`
   - Inhibit tracking is sender-based to avoid drift from unbalanced inhibit/uninhibit calls.
-  - Portal sender state includes stale-expiry cleanup and disconnect cleanup.
+  - Portal sender state is released by explicit close/disconnect rather than timeout expiry.
 
 - **Config key cleanup for D-Bus inhibit gate**
   - Canonical config key is now `enable_dbus_inhibit`.
@@ -73,6 +73,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed Chromium/Vivaldi Discord zombie stream holding `local=1` after a call ends.
 - Fixed chromium single-stream heuristic never firing when a filtered Firefox Discord tab was simultaneously uncorked (inflating `streams_total` and blocking the heuristic).
 - Fixed session inhibit handling regressions where D-Bus `Inhibit`/`UnInhibit` traffic was not being honored.
+- Fixed portal inhibit state dropping during long playback sessions (notably on labwc, and intermittently on niri) by removing timeout-based expiry and honoring explicit close/disconnect edges.
 
 ---
 
