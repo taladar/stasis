@@ -175,6 +175,12 @@ Config key:
 
 Use this when you want Stasis to honor session-bus inhibit requests from browsers, Steam, portal clients, and similar apps.
 
+Important separation:
+
+- `enable_dbus_inhibit` is for browser/app inhibit traffic coming from session D-Bus.
+- `monitor_media` is only for non-browser media/audio state.
+- Browser media inhibit is not handled by `monitor_media`; it is handled by D-Bus inhibit monitoring.
+
 ---
 
 ## CLI Usage

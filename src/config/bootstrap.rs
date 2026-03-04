@@ -64,6 +64,7 @@ default:
   # Optional: listen for session D-Bus inhibit traffic (default true).
   # This gate is not browser-only: browsers, Steam, and other desktop apps can
   # request inhibit through standard D-Bus/portal paths.
+  # Browser/media-tab inhibit lives here, not under monitor_media.
   # Disable this only if you explicitly do not want D-Bus inhibit requests
   # to pause idle progression.
   #enable_dbus_inhibit false
@@ -86,6 +87,8 @@ default:
   # use a locker that exits immediately (daemon/background), e.g. via a wrapper script.
   #pre_suspend_command "sync"
 
+  # Non-browser media/audio inhibit only. Browser/media-tab inhibit is handled
+  # by enable_dbus_inhibit above.
   monitor_media true
   ignore_remote_media true # ignore remote players (spotify/kdeconnect/etc.)
 
@@ -199,6 +202,7 @@ default:
   # Optional: listen for session D-Bus inhibit traffic (default true).
   # This gate is not browser-only: browsers, Steam, and other desktop apps can
   # request inhibit through standard D-Bus/portal paths.
+  # Browser/media-tab inhibit lives here, not under monitor_media.
   # Disable this only if you explicitly do not want D-Bus inhibit requests
   # to pause idle progression.
   #enable_dbus_inhibit false
@@ -206,6 +210,8 @@ default:
   # Optional: run before suspending (e.g., ensure lock is up)
   #pre_suspend_command "swaylock"
 
+  # Non-browser media/audio inhibit only. Browser/media-tab inhibit is handled
+  # by enable_dbus_inhibit above.
   monitor_media true
   ignore_remote_media true # ignore remote players (spotify/kdeconnect/etc.)
 

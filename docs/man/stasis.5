@@ -51,13 +51,19 @@ until inhibit clears.
 This only controls session D-Bus inhibit monitoring. It does not affect
 \fBmonitor_media\fR audio/media detection or \fBmedia_blacklist\fR filtering.
 .PP
+Use this for browser and other app inhibit requests carried over session D-Bus.
+Browser/media-tab inhibit is handled here, not by \fBmonitor_media\fR.
+.PP
 \fBImportant:\fR this requires the compositor to be started in a real D-Bus session
 (for example \fBniri-session\fR, \fBdbus-run-session\fR, or compositor-specific
 session launcher guidance).
 
 .TP
 .B monitor_media true|false
-If true, media playback can inhibit idle evaluation.
+If true, non-browser media playback can inhibit idle evaluation.
+.PP
+This setting is separate from D-Bus inhibit monitoring. Browser media inhibit
+is controlled by \fBenable_dbus_inhibit\fR.
 
 .TP
 .B ignore_remote_media true|false
