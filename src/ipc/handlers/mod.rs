@@ -1,8 +1,6 @@
 // Author: Dustin Pilgrim
 // License: MIT
 
-pub mod browser_activity;
-pub mod browser_inactive;
 pub mod dump;
 pub mod list;
 pub mod pause;

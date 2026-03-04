@@ -1,9 +1,0 @@
-{
-  "name": "io.github.saltnpepper97.stasis",
-  "description": "Native host bridge for Stasis browser activity extension",
-  "path": "__HOST_PATH__",
-  "type": "stdio",
-  "allowed_extensions": [
-    "stasis-browser-activity@saltnpepper97.github.io"
-  ]
-}

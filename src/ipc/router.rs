@@ -103,16 +103,6 @@ pub async fn route_command(cmd: &str, tx: &mpsc::Sender<ManagerMsg>) -> String {
         return crate::ipc::handlers::trigger::handle_trigger(args, tx).await;
     }
 
-    // ---------------- browser-activity ----------------
-    if cmd == "browser-activity" {
-        return crate::ipc::handlers::browser_activity::handle_browser_activity(tx).await;
-    }
-
-    // ---------------- browser-inactive ----------------
-    if cmd == "browser-inactive" {
-        return crate::ipc::handlers::browser_inactive::handle_browser_inactive(tx).await;
-    }
-
     // ---------------- dump ----------------
     if cmd == "dump" || cmd.starts_with("dump ") {
         let args = cmd.strip_prefix("dump").unwrap_or("").trim();

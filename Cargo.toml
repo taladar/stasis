@@ -1,6 +1,6 @@
 [package]
 name = "stasis"
-version = "1.0.1"
+version = "1.1.0"
 edition = "2024"
 authors = ["Dustin Pilgrim <dustin.pilgrim1997@gmail.com>"]
 description = "A modern Wayland idle manager that knows when to step back."
@@ -13,6 +13,13 @@ exclude = ["/.github", "/target", "/.idea", "/.vscode", "Cargo.lock"]
 
 [profile.dev]
 opt-level = 2
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = "symbols"
+panic = "abort"
 
 [dependencies]
 chrono = "0.4.44"

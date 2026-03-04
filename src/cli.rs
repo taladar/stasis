@@ -53,9 +53,6 @@ pub enum Command {
     #[command(about = "Manually trigger an idle action by name")]
     Trigger { step: String },
 
-    #[command(about = "Send a browser activity pulse to keep idle in waiting state")]
-    BrowserActivity,
-
     #[command(about = "Toggle manual idle inhibition")]
     ToggleInhibit,
 

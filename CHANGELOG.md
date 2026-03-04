@@ -63,6 +63,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Reduced log overhead during frequent `info` calls.
   - Improved daemon cleanliness under heavy polling scenarios.
 
+- **Release binary size optimization profile**
+  - Added a `profile.release` configuration in `Cargo.toml` tuned for smaller binaries (`opt-level = "z"`, `lto`, single codegen unit, symbol stripping, and `panic = "abort"`).
+
 ### Fixed
 
 - Eliminated excessive `done: event#…` log lines during normal operation.

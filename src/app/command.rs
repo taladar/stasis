@@ -102,22 +102,6 @@ pub async fn run(args: Args) -> Result<(), AnyError> {
             }
         }
 
-        Command::BrowserActivity => match crate::ipc::client::send_raw("browser-activity").await {
-            Ok(resp) => {
-                let out = resp.trim_end();
-                if out.is_empty() {
-                    println!("OK");
-                } else {
-                    println!("{out}");
-                }
-                Ok(())
-            }
-            Err(e) => {
-                eprintln!("stasis: {e}");
-                Ok(())
-            }
-        },
-
         Command::Info { json } => {
             let msg = if *json { "info --json" } else { "info" };
 
