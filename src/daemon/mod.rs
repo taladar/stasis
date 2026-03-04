@@ -45,6 +45,7 @@ pub struct Daemon {
 
     inhibit_epoch: u64,
     enable_loginctl: bool,
+    enable_dbus_inhibit: bool,
 
     chassis: crate::core::utils::ChassisKind,
     bad_profile_logged: bool,
@@ -98,9 +99,10 @@ impl Daemon {
         let media_blacklist = effective.media_blacklist.clone();
 
         let enable_loginctl = effective.enable_loginctl;
+        let enable_dbus_inhibit = effective.enable_dbus_inhibit;
 
         eventline::debug!(
-            "daemon: chassis={:?}, plan_src={:?}, active_profile={:?}, monitor_media={}, ignore_remote_media={}, media_blacklist_len={}, inhibit_apps_len={}, enable_loginctl={}, config_path={}",
+            "daemon: chassis={:?}, plan_src={:?}, active_profile={:?}, monitor_media={}, ignore_remote_media={}, media_blacklist_len={}, inhibit_apps_len={}, enable_loginctl={}, enable_dbus_inhibit={}, config_path={}",
             chassis,
             plan_src,
             cfg_file.active_profile,
@@ -109,6 +111,7 @@ impl Daemon {
             media_blacklist.len(),
             inhibit_apps.len(),
             enable_loginctl,
+            enable_dbus_inhibit,
             config_path.display(),
         );
 
@@ -133,6 +136,7 @@ impl Daemon {
             media_blacklist,
             inhibit_epoch: 0,
             enable_loginctl,
+            enable_dbus_inhibit,
             chassis,
             bad_profile_logged: false,
             verbose,

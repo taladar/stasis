@@ -62,6 +62,7 @@ impl Daemon {
             match crate::services::dbus::spawn_dbus_listeners(
                 sink,
                 self.enable_loginctl,
+                self.enable_dbus_inhibit,
                 shutdown.clone(),
             ) {
                 Ok(_handle) => eventline::info!("dbus: listener started"),

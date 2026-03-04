@@ -6,7 +6,8 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use futures::StreamExt;
-use tokio::sync::watch;
+use tokio::sync::{Mutex, watch};
+use tokio::time::{self, Duration, MissedTickBehavior};
 use zbus::{Connection, MatchRule, Proxy};
 
 use crate::core::events::Event;
@@ -23,15 +24,21 @@ pub trait EventSink: Send + Sync + 'static {
 /// - PrepareForSleep (org.freedesktop.login1.Manager)
 /// - Lock/Unlock (org.freedesktop.login1.Session)
 ///
-/// Lid events via UPower are always monitored.
+/// `enable_dbus_inhibit` gates session-bus inhibit monitoring:
+/// - org.freedesktop.ScreenSaver Inhibit/UnInhibit
+/// - org.gnome.SessionManager Inhibit/Uninhibit
+/// - org.freedesktop.portal.Inhibit Inhibit/CreateMonitor + Request.Close
+///
+/// Lid events via UPower are always monitored when system bus is available.
 ///
 /// Uses a `current_thread` runtime rather than the default multi-thread one.
 /// D-Bus listening is purely I/O-bound with no CPU parallelism needed; the
-/// full multi-thread runtime was spending ~1–2 MB on worker-thread stacks and
+/// full multi-thread runtime was spending ~1-2 MB on worker-thread stacks and
 /// work-stealing queues that were never used.
 pub fn spawn_dbus_listeners(
     sink: Arc<dyn EventSink>,
     enable_loginctl: bool,
+    enable_dbus_inhibit: bool,
     shutdown: watch::Receiver<bool>,
 ) -> std::io::Result<std::thread::JoinHandle<()>> {
     Ok(std::thread::spawn(move || {
@@ -41,7 +48,7 @@ pub fn spawn_dbus_listeners(
             .expect("tokio current_thread runtime");
 
         rt.block_on(async move {
-            if let Err(e) = run_dbus(sink, enable_loginctl, shutdown).await {
+            if let Err(e) = run_dbus(sink, enable_loginctl, enable_dbus_inhibit, shutdown).await {
                 eventline::error!("D-Bus listener failed: {e:?}");
             }
         });
@@ -55,157 +62,472 @@ fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
+#[derive(Debug, Default)]
+struct DbusInhibitTracker {
+    // Active inhibit state keyed by unique D-Bus sender name (e.g. ":1.29").
+    active_senders: HashMap<String, SenderInhibitState>,
+}
+
+#[derive(Debug, Default)]
+struct SenderInhibitState {
+    // Legacy ScreenSaver / SessionManager inhibitor state.
+    legacy_active: bool,
+    // Last seen portal Inhibit/CreateMonitor heartbeat from this sender.
+    portal_last_seen_ms: Option<u64>,
+}
+
+impl DbusInhibitTracker {
+    fn total(&self) -> usize {
+        self.active_senders.len()
+    }
+
+    fn mark_legacy_active(&mut self, sender: &str) {
+        let state = self.active_senders.entry(sender.to_string()).or_default();
+        state.legacy_active = true;
+    }
+
+    fn clear_legacy(&mut self, sender: &str) {
+        let should_remove = if let Some(state) = self.active_senders.get_mut(sender) {
+            state.legacy_active = false;
+            state.portal_last_seen_ms.is_none()
+        } else {
+            false
+        };
+
+        if should_remove {
+            self.active_senders.remove(sender);
+        }
+    }
+
+    fn mark_portal_seen(&mut self, sender: &str, now_ms: u64) {
+        let state = self.active_senders.entry(sender.to_string()).or_default();
+        state.portal_last_seen_ms = Some(now_ms);
+    }
+
+    fn clear_portal(&mut self, sender: &str) {
+        let should_remove = if let Some(state) = self.active_senders.get_mut(sender) {
+            state.portal_last_seen_ms = None;
+            !state.legacy_active
+        } else {
+            false
+        };
+
+        if should_remove {
+            self.active_senders.remove(sender);
+        }
+    }
+
+    fn remove_sender(&mut self, sender: &str) {
+        self.active_senders.remove(sender);
+    }
+
+    fn expire_stale_portal(&mut self, now_ms: u64, stale_ms: u64) {
+        self.active_senders.retain(|_, state| {
+            if let Some(last_seen) = state.portal_last_seen_ms {
+                if now_ms.saturating_sub(last_seen) >= stale_ms {
+                    state.portal_last_seen_ms = None;
+                }
+            }
+            state.legacy_active || state.portal_last_seen_ms.is_some()
+        });
+    }
+}
+
+async fn tracker_mark_legacy_active(
+    tracker: &Arc<Mutex<DbusInhibitTracker>>,
+    sink: &Arc<dyn EventSink>,
+    sender: &str,
+) {
+    let mut t = tracker.lock().await;
+    let old_total = t.total();
+    t.mark_legacy_active(sender);
+    let new_total = t.total();
+    drop(t);
+
+    if old_total == 0 && new_total > 0 {
+        eventline::debug!(
+            "dbus: inhibit active (legacy sender={}, total={})",
+            sender,
+            new_total
+        );
+        sink.push(Event::BrowserActivity { now_ms: now_ms() });
+    }
+}
+
+async fn tracker_clear_legacy(
+    tracker: &Arc<Mutex<DbusInhibitTracker>>,
+    sink: &Arc<dyn EventSink>,
+    sender: &str,
+) {
+    let mut t = tracker.lock().await;
+    let old_total = t.total();
+    t.clear_legacy(sender);
+    let new_total = t.total();
+    drop(t);
+
+    if old_total > 0 && new_total == 0 {
+        eventline::debug!("dbus: inhibit cleared (legacy sender={})", sender);
+        sink.push(Event::BrowserInactive { now_ms: now_ms() });
+    }
+}
+
+async fn tracker_mark_portal_seen(
+    tracker: &Arc<Mutex<DbusInhibitTracker>>,
+    sink: &Arc<dyn EventSink>,
+    sender: &str,
+) {
+    let now = now_ms();
+    let mut t = tracker.lock().await;
+    let old_total = t.total();
+    t.mark_portal_seen(sender, now);
+    let new_total = t.total();
+    drop(t);
+
+    if old_total == 0 && new_total > 0 {
+        eventline::debug!(
+            "dbus: inhibit active (portal sender={}, total={})",
+            sender,
+            new_total
+        );
+        sink.push(Event::BrowserActivity { now_ms: now });
+    }
+}
+
+async fn tracker_clear_portal(
+    tracker: &Arc<Mutex<DbusInhibitTracker>>,
+    sink: &Arc<dyn EventSink>,
+    sender: &str,
+) {
+    let mut t = tracker.lock().await;
+    let old_total = t.total();
+    t.clear_portal(sender);
+    let new_total = t.total();
+    drop(t);
+
+    if old_total > 0 && new_total == 0 {
+        eventline::debug!("dbus: inhibit cleared (portal sender={})", sender);
+        sink.push(Event::BrowserInactive { now_ms: now_ms() });
+    }
+}
+
+async fn tracker_expire_portal(
+    tracker: &Arc<Mutex<DbusInhibitTracker>>,
+    sink: &Arc<dyn EventSink>,
+    stale_ms: u64,
+) {
+    let now = now_ms();
+    let mut t = tracker.lock().await;
+    let old_total = t.total();
+    t.expire_stale_portal(now, stale_ms);
+    let new_total = t.total();
+    drop(t);
+
+    if old_total > 0 && new_total == 0 {
+        eventline::debug!("dbus: inhibit expired (stale_ms={})", stale_ms);
+        sink.push(Event::BrowserInactive { now_ms: now });
+    }
+}
+
+async fn tracker_remove_sender(
+    tracker: &Arc<Mutex<DbusInhibitTracker>>,
+    sink: &Arc<dyn EventSink>,
+    sender: &str,
+) {
+    let mut t = tracker.lock().await;
+    let old_total = t.total();
+    t.remove_sender(sender);
+    let new_total = t.total();
+    drop(t);
+
+    if old_total > 0 && new_total == 0 {
+        eventline::debug!("dbus: inhibit cleared by sender disconnect (sender={})", sender);
+        sink.push(Event::BrowserInactive { now_ms: now_ms() });
+    }
+}
+
+async fn spawn_dbus_inhibit_monitor(sink: Arc<dyn EventSink>) -> zbus::Result<()> {
+    const PORTAL_STALE_MS: u64 = 90_000;
+    const PORTAL_SWEEP_MS: u64 = 5_000;
+
+    let monitor = Connection::session().await?;
+    monitor
+        .call_method(
+            Some("org.freedesktop.DBus"),
+            "/org/freedesktop/DBus",
+            Some("org.freedesktop.DBus.Monitoring"),
+            "BecomeMonitor",
+            &(&[] as &[&str], 0u32),
+        )
+        .await?;
+
+    let tracker = Arc::new(Mutex::new(DbusInhibitTracker::default()));
+    eventline::debug!("dbus: inhibit monitor started (session bus)");
+
+    let cleanup_sink = sink.clone();
+    let cleanup_tracker = tracker.clone();
+    tokio::spawn(async move {
+        let mut interval = time::interval(Duration::from_millis(PORTAL_SWEEP_MS));
+        interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        loop {
+            interval.tick().await;
+            tracker_expire_portal(&cleanup_tracker, &cleanup_sink, PORTAL_STALE_MS).await;
+        }
+    });
+
+    let mut stream = zbus::MessageStream::from(monitor);
+    tokio::spawn(async move {
+        while let Some(msg) = stream.next().await {
+            let Ok(msg) = msg else { continue };
+
+            let header = msg.header();
+            let iface = header
+                .interface()
+                .map(|i| i.as_str())
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            let member = header
+                .member()
+                .map(|m| m.as_str())
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+
+            match msg.message_type() {
+                zbus::message::Type::MethodCall => {
+                    let Some(sender) = header.sender() else {
+                        continue;
+                    };
+                    let sender = sender.to_string();
+
+                    let legacy_inhibit_call = (iface == "org.freedesktop.screensaver"
+                        && member == "inhibit")
+                        || (iface == "org.gnome.sessionmanager" && member == "inhibit");
+
+                    if legacy_inhibit_call {
+                        tracker_mark_legacy_active(&tracker, &sink, &sender).await;
+                        continue;
+                    }
+
+                    let legacy_uninhibit_call = (iface == "org.freedesktop.screensaver"
+                        && member == "uninhibit")
+                        || (iface == "org.gnome.sessionmanager" && member == "uninhibit");
+
+                    if legacy_uninhibit_call {
+                        tracker_clear_legacy(&tracker, &sink, &sender).await;
+                        continue;
+                    }
+
+                    // Portal inhibit paths used by wlroots/xdg-desktop-portal stacks.
+                    let portal_inhibit_call = iface == "org.freedesktop.portal.inhibit"
+                        && (member == "inhibit" || member == "createmonitor");
+
+                    if portal_inhibit_call {
+                        tracker_mark_portal_seen(&tracker, &sink, &sender).await;
+                        continue;
+                    }
+
+                    // XDG portal release path: apps close per-request handles via Request.Close.
+                    if iface == "org.freedesktop.portal.request" && member == "close" {
+                        tracker_clear_portal(&tracker, &sink, &sender).await;
+                    }
+                }
+
+                zbus::message::Type::Signal => {
+                    if iface == "org.freedesktop.dbus" && member == "nameownerchanged" {
+                        let parsed: (String, String, String) = match msg.body().deserialize() {
+                            Ok(v) => v,
+                            Err(_) => continue,
+                        };
+                        let (name, _old_owner, new_owner) = parsed;
+
+                        if name.starts_with(':') && new_owner.is_empty() {
+                            tracker_remove_sender(&tracker, &sink, &name).await;
+                        }
+                    }
+                }
+
+                _ => {}
+            }
+        }
+    });
+
+    eventline::debug!("dbus: inhibit monitor subscriptions active");
+    Ok(())
+}
+
 async fn run_dbus(
     sink: Arc<dyn EventSink>,
     enable_loginctl: bool,
+    enable_dbus_inhibit: bool,
     mut shutdown: watch::Receiver<bool>,
 ) -> zbus::Result<()> {
     let sys = match Connection::system().await {
-        Ok(c) => c,
+        Ok(c) => Some(c),
         Err(e) => {
             eventline::warn!("D-Bus: could not connect to system bus: {e:?}");
-            return Ok(());
+            None
         }
     };
 
-    if enable_loginctl {
-        // 1) PrepareForSleep (login1 Manager)
-        match Proxy::new(
-            &sys,
-            "org.freedesktop.login1",
-            "/org/freedesktop/login1",
-            "org.freedesktop.login1.Manager",
-        )
-        .await
-        {
-            Ok(proxy) => match proxy.receive_signal("PrepareForSleep").await {
-                Ok(mut stream) => {
-                    let sink = sink.clone();
-                    tokio::spawn(async move {
-                        while let Some(sig) = stream.next().await {
-                            let going_down: bool = match sig.body().deserialize() {
-                                Ok(v) => v,
-                                Err(_) => continue,
-                            };
-                            let t = now_ms();
-                            sink.push(if going_down {
-                                Event::PrepareForSleep { now_ms: t }
-                            } else {
-                                Event::ResumedFromSleep { now_ms: t }
-                            });
-                        }
-                    });
-                }
-                Err(e) => {
-                    eventline::warn!("D-Bus: could not subscribe to PrepareForSleep: {e:?}");
-                }
-            },
-            Err(e) => {
-                // Do NOT fall back to a different proxy — PrepareForSleep monitoring
-                // is simply unavailable. Log and continue; lid/lock events may still work.
-                eventline::warn!(
-                    "D-Bus: login1 Manager proxy unavailable: {e:?}; sleep/wake monitoring disabled"
-                );
-            }
+    let session = match Connection::session().await {
+        Ok(c) => Some(c),
+        Err(e) => {
+            eventline::warn!("D-Bus: could not connect to session bus: {e:?}");
+            None
         }
+    };
 
-        // 2) Lock/Unlock (login1 Session)
-        match get_current_session_path(&sys).await {
-            Ok(session_path) => {
-                eventline::info!("D-Bus: monitoring session {}", session_path.as_str());
-
-                match Proxy::new(
-                    &sys,
-                    "org.freedesktop.login1",
-                    session_path,
-                    "org.freedesktop.login1.Session",
-                )
-                .await
-                {
-                    Ok(proxy) => {
-                        let lock_stream = proxy.receive_signal("Lock").await;
-                        let unlock_stream = proxy.receive_signal("Unlock").await;
-
-                        match (lock_stream, unlock_stream) {
-                            (Ok(mut lock_stream), Ok(mut unlock_stream)) => {
-                                let sink_lock = sink.clone();
-                                tokio::spawn(async move {
-                                    while let Some(_) = lock_stream.next().await {
-                                        sink_lock.push(Event::SessionLocked { now_ms: now_ms() });
-                                    }
-                                });
-
-                                let sink_unlock = sink.clone();
-                                tokio::spawn(async move {
-                                    while let Some(_) = unlock_stream.next().await {
-                                        sink_unlock
-                                            .push(Event::SessionUnlocked { now_ms: now_ms() });
-                                    }
-                                });
-                            }
-                            (Err(e), _) | (_, Err(e)) => {
-                                eventline::warn!(
-                                    "D-Bus: could not subscribe to session Lock/Unlock: {e:?}"
-                                );
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        eventline::warn!("D-Bus: could not create session proxy: {e:?}");
-                    }
-                }
+    if enable_dbus_inhibit {
+        if session.is_some() {
+            if let Err(e) = spawn_dbus_inhibit_monitor(sink.clone()).await {
+                eventline::warn!("D-Bus: inhibit monitor unavailable on session bus: {e:?}");
             }
-            Err(e) => {
-                eventline::warn!("D-Bus: could not resolve session path for lock/unlock: {e:?}");
-            }
+        } else {
+            eventline::warn!("D-Bus: inhibit monitoring requested, but session bus is unavailable");
         }
     } else {
-        eventline::info!("D-Bus: loginctl integration disabled; skipping login1 monitoring");
+        eventline::info!("D-Bus: session inhibit monitoring disabled by config");
     }
 
-    // 3) Lid events via UPower PropertiesChanged
-    {
-        let rule = MatchRule::builder()
-            .msg_type(zbus::message::Type::Signal)
-            .interface("org.freedesktop.DBus.Properties")?
-            .member("PropertiesChanged")?
-            .path("/org/freedesktop/UPower")?
-            .build();
-
-        let mut stream = zbus::MessageStream::for_match_rule(rule, &sys, None).await?;
-        let sink = sink.clone();
-
-        tokio::spawn(async move {
-            use zbus::zvariant::Value;
-
-            while let Some(msg) = stream.next().await {
-                let Ok(msg) = msg else { continue };
-
-                let body = msg.body();
-                let parsed: (String, HashMap<String, Value>, Vec<String>) = match body.deserialize()
-                {
-                    Ok(v) => v,
-                    Err(_) => continue,
-                };
-
-                let (iface, changed, _invalidated) = parsed;
-
-                if iface != "org.freedesktop.UPower" {
-                    continue;
-                }
-
-                if let Some(v) = changed.get("LidIsClosed") {
-                    if let Ok(closed) = v.clone().downcast::<bool>() {
-                        let t = now_ms();
-                        sink.push(if closed {
-                            Event::LidClosed { now_ms: t }
-                        } else {
-                            Event::LidOpened { now_ms: t }
+    if let Some(sys) = sys.as_ref() {
+        if enable_loginctl {
+            // 1) PrepareForSleep (login1 Manager)
+            match Proxy::new(
+                sys,
+                "org.freedesktop.login1",
+                "/org/freedesktop/login1",
+                "org.freedesktop.login1.Manager",
+            )
+            .await
+            {
+                Ok(proxy) => match proxy.receive_signal("PrepareForSleep").await {
+                    Ok(mut stream) => {
+                        let sink = sink.clone();
+                        tokio::spawn(async move {
+                            while let Some(sig) = stream.next().await {
+                                let going_down: bool = match sig.body().deserialize() {
+                                    Ok(v) => v,
+                                    Err(_) => continue,
+                                };
+                                let t = now_ms();
+                                sink.push(if going_down {
+                                    Event::PrepareForSleep { now_ms: t }
+                                } else {
+                                    Event::ResumedFromSleep { now_ms: t }
+                                });
+                            }
                         });
                     }
+                    Err(e) => {
+                        eventline::warn!("D-Bus: could not subscribe to PrepareForSleep: {e:?}");
+                    }
+                },
+                Err(e) => {
+                    eventline::warn!(
+                        "D-Bus: login1 Manager proxy unavailable: {e:?}; sleep/wake monitoring disabled"
+                    );
                 }
             }
-        });
+
+            // 2) Lock/Unlock (login1 Session)
+            match get_current_session_path(sys).await {
+                Ok(session_path) => {
+                    eventline::info!("D-Bus: monitoring session {}", session_path.as_str());
+
+                    match Proxy::new(
+                        sys,
+                        "org.freedesktop.login1",
+                        session_path,
+                        "org.freedesktop.login1.Session",
+                    )
+                    .await
+                    {
+                        Ok(proxy) => {
+                            let lock_stream = proxy.receive_signal("Lock").await;
+                            let unlock_stream = proxy.receive_signal("Unlock").await;
+
+                            match (lock_stream, unlock_stream) {
+                                (Ok(mut lock_stream), Ok(mut unlock_stream)) => {
+                                    let sink_lock = sink.clone();
+                                    tokio::spawn(async move {
+                                        while let Some(_) = lock_stream.next().await {
+                                            sink_lock.push(Event::SessionLocked { now_ms: now_ms() });
+                                        }
+                                    });
+
+                                    let sink_unlock = sink.clone();
+                                    tokio::spawn(async move {
+                                        while let Some(_) = unlock_stream.next().await {
+                                            sink_unlock
+                                                .push(Event::SessionUnlocked { now_ms: now_ms() });
+                                        }
+                                    });
+                                }
+                                (Err(e), _) | (_, Err(e)) => {
+                                    eventline::warn!(
+                                        "D-Bus: could not subscribe to session Lock/Unlock: {e:?}"
+                                    );
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            eventline::warn!("D-Bus: could not create session proxy: {e:?}");
+                        }
+                    }
+                }
+                Err(e) => {
+                    eventline::warn!("D-Bus: could not resolve session path for lock/unlock: {e:?}");
+                }
+            }
+        } else {
+            eventline::info!("D-Bus: loginctl integration disabled; skipping login1 monitoring");
+        }
+
+        // 3) Lid events via UPower PropertiesChanged
+        {
+            let rule = MatchRule::builder()
+                .msg_type(zbus::message::Type::Signal)
+                .interface("org.freedesktop.DBus.Properties")?
+                .member("PropertiesChanged")?
+                .path("/org/freedesktop/UPower")?
+                .build();
+
+            let mut stream = zbus::MessageStream::for_match_rule(rule, sys, None).await?;
+            let sink = sink.clone();
+
+            tokio::spawn(async move {
+                use zbus::zvariant::Value;
+
+                while let Some(msg) = stream.next().await {
+                    let Ok(msg) = msg else { continue };
+
+                    let body = msg.body();
+                    let parsed: (String, HashMap<String, Value>, Vec<String>) =
+                        match body.deserialize() {
+                            Ok(v) => v,
+                            Err(_) => continue,
+                        };
+
+                    let (iface, changed, _invalidated) = parsed;
+
+                    if iface != "org.freedesktop.UPower" {
+                        continue;
+                    }
+
+                    if let Some(v) = changed.get("LidIsClosed") {
+                        if let Ok(closed) = v.clone().downcast::<bool>() {
+                            let t = now_ms();
+                            sink.push(if closed {
+                                Event::LidClosed { now_ms: t }
+                            } else {
+                                Event::LidOpened { now_ms: t }
+                            });
+                        }
+                    }
+                }
+            });
+        }
+    } else {
+        eventline::warn!("D-Bus: system bus unavailable; login1/lid monitoring disabled");
     }
 
     // Wait for shutdown; do NOT block forever.

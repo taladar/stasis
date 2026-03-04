@@ -8,6 +8,10 @@ stasis \- idle manager with ordered, per-step timers and profile overlays
 .B stasis
 is a user-session idle manager that runs an ordered plan of actions (steps)
 after periods of inactivity.
+.PP
+\fBImportant:\fR for full D-Bus session features (such as session inhibit monitoring),
+run your compositor inside a real session launcher (for example
+\fBniri-session\fR, \fBdbus-run-session\fR, or your compositor's recommended launcher).
 
 Steps are evaluated strictly in file order and use per-step sequential timers:
 each step's timeout counts from the moment the previous enabled step fires
@@ -108,16 +112,6 @@ Special value:
 
 Custom steps can be triggered by their name (normalized) and also by
 \fBcustom:\fR or \fBcustom-\fR prefixes.
-
-.TP
-.B browser-activity
-Send a browser activity pulse to the running daemon.
-This resets idle timing like user activity but does not set inhibitor counts.
-
-.TP
-.B browser-inactive
-Send a browser inactive pulse to the running daemon.
-This clears browser hold immediately.
 
 .TP
 .B toggle-inhibit

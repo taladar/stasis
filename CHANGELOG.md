@@ -9,18 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Browser handling policy (migration)**
-  - Browser detection now uses an explicit extension/native-host bridge for reliable behavior.
-  - Browser signals are treated as waiting-for-idle activity (`browser-activity` / `browser-inactive`) rather than media inhibitor counters.
-  - Built-in browser idle-inhibitor probing paths were removed/reduced where inconsistent.
+- **Session D-Bus inhibit support restored and expanded**
+  - Stasis now monitors session-bus inhibit method calls again:
+    - `org.freedesktop.ScreenSaver` `Inhibit` / `UnInhibit`
+    - `org.gnome.SessionManager` `Inhibit` / `Uninhibit`
+    - `org.freedesktop.portal.Inhibit` `Inhibit` / `CreateMonitor`
+    - release via `org.freedesktop.portal.Request.Close`
+  - Inhibit tracking is sender-based to avoid drift from unbalanced inhibit/uninhibit calls.
+  - Portal sender state includes stale-expiry cleanup and disconnect cleanup.
 
-- **Media service scope tightened**
-  - `media.rs` now focuses on non-browser media detection.
-  - Browser media is handled by explicit extension pulses instead of compositor/browser heuristics.
-
-- **Manager timing polish for browser pulses**
-  - Added browser activity hold window behavior with explicit inactive edge handling.
-  - Reduced hold window to improve responsiveness and reduce transient wait blips.
+- **Config key cleanup for D-Bus inhibit gate**
+  - Canonical config key is now `enable_dbus_inhibit`.
+  - Legacy key parsing fallback was removed from runtime config loading.
+  - Built-in migration rewrites legacy `listen_browser_dbus_inhibit` to `enable_dbus_inhibit`.
 
 - **Config parser naming cleanup**
   - Removed misleading `legacy_*` naming in plan parse internals where behavior is not legacy-only.
@@ -46,7 +47,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Bootstrap configuration defaults**
   - Updated generated default configs to better reflect current suspend/lock semantics.
   - Clarified `pre_suspend_command` usage in generated templates and documentation.
+  - Added explicit `enable_dbus_inhibit` knob documentation in generated templates.
   - Desktop and laptop templates now more clearly separate lock-step behavior from suspend behavior.
+
+- **Documentation consistency**
+  - README and man pages now consistently document `enable_dbus_inhibit`.
+  - Added an explicit warning that compositors should be launched in a real session context (e.g. `niri-session`, `dbus-run-session`, or compositor-recommended launcher) for reliable session D-Bus features.
 
 - **Suspend semantics clarification**
   - `pre_suspend_command` is now documented as intended for use with backgrounded (`daemonize`) suspend commands.
@@ -66,6 +72,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed Firefox counting one playing tab as two due to PipeWire creating duplicate sink-input blocks.
 - Fixed Chromium/Vivaldi Discord zombie stream holding `local=1` after a call ends.
 - Fixed chromium single-stream heuristic never firing when a filtered Firefox Discord tab was simultaneously uncorked (inflating `streams_total` and blocking the heuristic).
+- Fixed session inhibit handling regressions where D-Bus `Inhibit`/`UnInhibit` traffic was not being honored.
 
 ---
 

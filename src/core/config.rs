@@ -121,6 +121,7 @@ impl Pattern {
 pub struct Config {
     // ---- globals ----
     pub enable_loginctl: bool,
+    pub enable_dbus_inhibit: bool,
     pub pre_suspend_command: Option<String>,
 
     /// Shell command to run immediately when the lid is closed (if any).
@@ -169,6 +170,7 @@ impl Config {
     pub fn disabled() -> Self {
         Self {
             enable_loginctl: false,
+            enable_dbus_inhibit: true,
             pre_suspend_command: None,
 
             lid_close_action: None,
@@ -330,6 +332,7 @@ pub struct Profile {
 pub struct PartialConfig {
     // ---- globals ----
     pub enable_loginctl: Option<bool>,
+    pub enable_dbus_inhibit: Option<bool>,
     pub pre_suspend_command: Option<Option<String>>,
 
     /// `None` = no override; `Some(None)` = clear; `Some(Some(cmd))` = set command.
@@ -383,6 +386,9 @@ impl PartialConfig {
         // ---- globals ----
         if let Some(v) = self.enable_loginctl {
             base.enable_loginctl = v;
+        }
+        if let Some(v) = self.enable_dbus_inhibit {
+            base.enable_dbus_inhibit = v;
         }
 
         if let Some(v) = &self.pre_suspend_command {

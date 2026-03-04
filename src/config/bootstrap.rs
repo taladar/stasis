@@ -61,6 +61,13 @@ default:
   # it does not actually run your locker command.
   #enable_loginctl true
 
+  # Optional: listen for session D-Bus inhibit traffic (default true).
+  # This gate is not browser-only: browsers, Steam, and other desktop apps can
+  # request inhibit through standard D-Bus/portal paths.
+  # Disable this only if you explicitly do not want D-Bus inhibit requests
+  # to pause idle progression.
+  #enable_dbus_inhibit false
+
   # Optional: run before suspending (hook).
   #
   # Behavior:
@@ -188,6 +195,13 @@ default:
   # NOTE: this only updates internal state when lock/unlock signals are received;
   # it does not actually run your locker command.
   #enable_loginctl true
+
+  # Optional: listen for session D-Bus inhibit traffic (default true).
+  # This gate is not browser-only: browsers, Steam, and other desktop apps can
+  # request inhibit through standard D-Bus/portal paths.
+  # Disable this only if you explicitly do not want D-Bus inhibit requests
+  # to pause idle progression.
+  #enable_dbus_inhibit false
 
   # Optional: run before suspending (e.g., ensure lock is up)
   #pre_suspend_command "swaylock"

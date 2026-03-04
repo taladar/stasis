@@ -26,12 +26,23 @@ fn looks_like_new_with_use_loginctl(text: &str) -> bool {
     has_default && has_use
 }
 
+fn looks_like_new_with_legacy_dbus_inhibit_key(text: &str) -> bool {
+    let has_default = text.lines().any(|l| l.trim_start().starts_with("default:"));
+    let has_legacy_key = text
+        .lines()
+        .any(|l| l.trim_start().starts_with("listen_browser_dbus_inhibit "));
+    has_default && has_legacy_key
+}
+
 pub fn migrate_in_place(path: &Path) -> Result<MigrateOutcome, String> {
     let text = fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
 
-    // New-format configs that still have per-step `use_loginctl`: hoist to default.enable_loginctl.
-    if looks_like_new_with_use_loginctl(&text) {
-        let new_text = migrate_new_use_loginctl(&text);
+    // New-format rewrites:
+    // - hoist per-step `use_loginctl` into default.enable_loginctl
+    // - rename legacy `listen_browser_dbus_inhibit` -> `enable_dbus_inhibit`
+    if looks_like_new_with_use_loginctl(&text) || looks_like_new_with_legacy_dbus_inhibit_key(&text)
+    {
+        let new_text = migrate_new_keys(&text);
 
         let backup_path = backup_name(path);
         let _ = fs::remove_file(&backup_path);
@@ -82,13 +93,22 @@ fn backup_name(path: &Path) -> PathBuf {
 
 /* ---------------- new-with-use_loginctl rewrite ---------------- */
 
-fn migrate_new_use_loginctl(text: &str) -> String {
+fn migrate_new_keys(text: &str) -> String {
     // Drop all `use_loginctl ...` lines, remember if any were true.
     let mut saw_true = false;
     let mut out_lines: Vec<String> = Vec::new();
 
     for line in text.lines() {
         let t = line.trim_start();
+        if t.starts_with("listen_browser_dbus_inhibit ") {
+            let indent = line
+                .chars()
+                .take_while(|c| c.is_ascii_whitespace())
+                .collect::<String>();
+            let val = t.split_whitespace().nth(1).unwrap_or("true");
+            out_lines.push(format!("{indent}enable_dbus_inhibit {val}"));
+            continue;
+        }
         if t.starts_with("use_loginctl ") {
             if t.split_whitespace()
                 .nth(1)
@@ -102,7 +122,7 @@ fn migrate_new_use_loginctl(text: &str) -> String {
         out_lines.push(line.to_string());
     }
 
-    // If nothing was true, we only removed noise.
+    // If we did not need to insert enable_loginctl, return the rewritten text.
     if !saw_true {
         return ensure_trailing_newline(out_lines.join("\n"));
     }
@@ -485,6 +505,8 @@ fn emit_globals(out: &mut String, lines: &[Line], indent: usize) {
         // rename notify-before-command -> notify_before_action
         let key = if l.key == "notify_before_command" {
             "notify_before_action".to_string()
+        } else if l.key == "listen_browser_dbus_inhibit" {
+            "enable_dbus_inhibit".to_string()
         } else if l.key == "debounce_seconds" || l.key == "debounce-seconds" {
             "debounce_seconds".to_string()
         } else {

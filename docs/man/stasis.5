@@ -43,6 +43,19 @@ Optional command run immediately before a suspend step fires. If set, it runs
 before the suspend step command (or before the built-in suspend action).
 
 .TP
+.B enable_dbus_inhibit true|false
+Controls whether Stasis listens to D-Bus inhibit signals on the session bus.
+When enabled (default), D-Bus inhibit state can hold Stasis in waiting-for-idle
+until inhibit clears.
+.PP
+This only controls session D-Bus inhibit monitoring. It does not affect
+\fBmonitor_media\fR audio/media detection or \fBmedia_blacklist\fR filtering.
+.PP
+\fBImportant:\fR this requires the compositor to be started in a real D-Bus session
+(for example \fBniri-session\fR, \fBdbus-run-session\fR, or compositor-specific
+session launcher guidance).
+
+.TP
 .B monitor_media true|false
 If true, media playback can inhibit idle evaluation.
 
@@ -89,8 +102,7 @@ Setting this to an empty string (\fB""\fR) clears any inherited lid-open action.
 A plan is a sequence of step blocks. Stasis executes steps strictly in the order
 they appear in the effective configuration.
 
-A step is considered \fIenabled\fR if it has a \fBcommand\fR,
-or it is a \fBlock_screen\fR step with \fBenable_loginctl true\fR (state-aware lock step).
+A step is considered \fIenabled\fR if it has a \fBcommand\fR.
 
 A step with \fBtimeout 0\fR is an \fIinstant one-shot\fR and fires immediately once
 when a plan starts (for example, on startup or when switching power source).
@@ -129,10 +141,6 @@ If \fBenable_loginctl true\fR, Stasis can track whether the session is currently
 .IP \(bu 2
 Lock behavior is lock-centric: if the session is already locked when the lock step
 would run, Stasis advances past it without re-running it.
-.IP \(bu 2
-If the \fBlock_screen\fR step has no \fBcommand\fR and \fBenable_loginctl true\fR,
-the step acts as a \fIstate checkpoint\fR (useful for scripting/ordering), but it does not
-lock the screen by itself.
 
 .SS Suspend behavior
 A \fBsuspend\fR step may omit \fBcommand\fR. In that case Stasis performs its built-in
@@ -247,6 +255,7 @@ A minimal desktop example:
 .nf
 default:
   enable_loginctl true
+  enable_dbus_inhibit true
   debounce_seconds 5
   notify_before_action true
 

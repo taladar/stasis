@@ -18,6 +18,7 @@
 default:
   # ----- Global knobs (these DO get overridden by profiles) -----
   enable_loginctl false
+  enable_dbus_inhibit true
   pre_suspend_command None
   monitor_media true
   ignore_remote_media true
@@ -187,6 +188,7 @@ work:
 
   # Override globals (example: longer debounce, keep media monitoring)
   enable_loginctl true
+  enable_dbus_inhibit true
   debounce_seconds 10
   monitor_media true
   ignore_remote_media true
@@ -214,6 +216,7 @@ presentation:
   mode "fresh"   # fresh config: define ALL globals + ONLY the steps you want
 
   # Globals (must be set because fresh does not inherit defaults)
+  enable_dbus_inhibit true
   pre_suspend_command None
   monitor_media false
   ignore_remote_media true

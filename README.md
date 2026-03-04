@@ -41,16 +41,13 @@ It is a **context-aware, event-driven idle manager** built around explicit state
 - 🎵 Media-aware idle handling
   - Optional audio-based detection
   - Differentiates active, paused, and muted streams
-- 🌐 Browser activity/media bridge (recommended)
-  - Event-driven browser pulses (`browser-activity` / `browser-inactive`)
-  - Reliable behavior across Firefox and Chromium with one shared extension codebase
 - 🚫 Application-specific inhibitors
   - Prevent idle when selected apps are running
   - Regex-based matching supported
 - ⏸️ Wayland idle inhibitor support
   - Honors compositor and application inhibitors
 - 🛌 Laptop-aware power handling
-  - Optional D-Bus integration for lid events and suspend/resume
+  - Optional D-Bus integration for lid events, suspend/resume, and session inhibit traffic
 - ⚙️ Flexible action plans
   - Startup steps, sequential steps, instant actions, resume hooks
 - 🔁 Manual idle inhibition
@@ -120,7 +117,7 @@ security.pam.services.swaylock = {};
 Dependencies:
 - rust / cargo
 - wayland (for native input detection)
-- dbus (optional, for lid events and suspend/resume handling)
+- dbus (optional, for lid events, suspend/resume, and session inhibit handling)
 - libnotify (optional, for desktop notifications)
 - pulseaudio or pipewire-pulse (optional, for audio/media detection)
 
@@ -150,6 +147,11 @@ Build & install:
 > swaylock -f
 > ```
 
+> [!IMPORTANT]
+> **D-Bus session startup is required for full D-Bus features.**
+> If you want `enable_dbus_inhibit` and other session-bus driven behavior to work reliably, start your compositor within a real D-Bus session (for example `niri-session`, `dbus-run-session`, or your compositor/distribution's recommended session launcher).
+> If the compositor is not running in a proper session, inhibit monitoring may not activate.
+
 Start the daemon:
 
     stasis
@@ -159,54 +161,19 @@ https://saltnpepper97.github.io/stasis-site/
 
 ---
 
-## Browser Integration (Recommended)
+## D-Bus Inhibit Support
 
-For reliable browser behavior, Stasis now supports a native browser bridge:
+Stasis supports inhibit messages from session D-Bus, including:
 
-- Browser extension emits `browser-activity` and `browser-inactive` pulses.
-- Stasis keeps browser signals in a waiting-for-idle state without inflating inhibitor counts.
-- Non-browser media and `inhibit_apps` still use core service counters.
+- `org.freedesktop.ScreenSaver` `Inhibit` / `UnInhibit`
+- `org.gnome.SessionManager` `Inhibit` / `Uninhibit`
+- `org.freedesktop.portal.Inhibit` (`Inhibit` / `CreateMonitor`) with release via `org.freedesktop.portal.Request.Close`
 
-Repository paths:
+Config key:
 
-- Extension scaffold: `browser/extension/`
-- Native host scaffold: `browser/native-host/`
+- `enable_dbus_inhibit true|false` (default true)
 
-Local build/install:
-
-```bash
-browser/extension/scripts/build.sh
-browser/native-host/scripts/install.sh
-```
-
-For Chromium-family browsers, install native host with extension ID:
-
-```bash
-browser/native-host/scripts/install.sh --chromium-origin <EXTENSION_ID>
-```
-
-Browser support status:
-
-| Browser | Integration Support | Store/Distribution Status | Notes |
-|---------|---------------------|---------------------------|-------|
-| Firefox | ✅ Supported | ⏳ Add-on awaiting approval | Use `stasis-browser-activity-firefox.xpi` from `browser/extension/dist` while approval is pending. |
-| Chromium-family | ✅ Supported | 🚧 Submission planned shortly | Build/package is ready; native host install requires `--chromium-origin <EXTENSION_ID>`. |
-
----
-
-## Packager Notes (Arch/AUR)
-
-If packaging browser bridge support, include:
-
-- `browser/native-host/stasis_native_host.py`
-- `browser/native-host/manifests/*.template`
-- `browser/native-host/scripts/install.sh`
-
-Recommended post-install guidance:
-
-- User loads extension (Firefox/Chromium artifact from `browser/extension/dist`).
-- User runs native host installer script once (with Chromium extension ID when needed).
-- User restarts browser after manifest install.
+Use this when you want Stasis to honor session-bus inhibit requests from browsers, Steam, portal clients, and similar apps.
 
 ---
 

@@ -148,6 +148,10 @@ fn render_config(cfg_opt: Option<&Config>, state: &State) -> String {
         "IgnoreRemoteMedia: {}\n",
         yesno(cfg.ignore_remote_media)
     ));
+    out.push_str(&format!(
+        "ListenDbusInhibit: {}\n",
+        yesno(cfg.enable_dbus_inhibit)
+    ));
 
     if !cfg.inhibit_apps.is_empty() {
         out.push_str(&format!(
