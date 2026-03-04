@@ -185,6 +185,13 @@ For Chromium-family browsers, install native host with extension ID:
 browser/native-host/scripts/install.sh --chromium-origin <EXTENSION_ID>
 ```
 
+Browser support status:
+
+| Browser | Integration Support | Store/Distribution Status | Notes |
+|---------|---------------------|---------------------------|-------|
+| Firefox | ✅ Supported | ⏳ Add-on awaiting approval | Use `stasis-browser-activity-firefox.xpi` from `browser/extension/dist` while approval is pending. |
+| Chromium-family | ✅ Supported | 🚧 Submission planned shortly | Build/package is ready; native host install requires `--chromium-origin <EXTENSION_ID>`. |
+
 ---
 
 ## Packager Notes (Arch/AUR)
