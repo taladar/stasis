@@ -12,10 +12,9 @@ use crate::core::{
 use super::Manager;
 
 impl Manager {
-    // Browser extension activity is authoritative for browser-originated usage.
-    // Hold window is refreshed by browser keepalive pulses and cleared on
-    // browser-inactive edges.
-    const BROWSER_ACTIVITY_HOLD_MS: u64 = 10_000;
+    // Browser-originated inhibit is authoritative and must remain active until
+    // an explicit inactive edge (or sender disconnect) clears it.
+    const BROWSER_ACTIVITY_HOLD_MS: u64 = u64::MAX;
 
     pub fn handle_event(&mut self, state: &mut State, event: Event) -> Result<Vec<Action>, Error> {
         let now_ms = event.now_ms();
@@ -39,6 +38,12 @@ impl Manager {
 
                 // Browser keepalive/activity pulses keep us in waiting-for-idle.
                 if state.browser_activity_active(now_ms) {
+                    return Ok(out);
+                }
+
+                // While waiting for a real idle edge, do not schedule notifications
+                // or run plan steps.
+                if state.debounce_pending() {
                     return Ok(out);
                 }
 

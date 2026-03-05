@@ -413,7 +413,7 @@ impl State {
     }
 
     pub fn browser_activity_active(&self, now_ms: u64) -> bool {
-        now_ms <= self.browser_activity_until_ms
+        now_ms < self.browser_activity_until_ms
     }
 
     pub fn set_step_index(&mut self, v: usize) {

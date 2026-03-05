@@ -56,10 +56,15 @@ struct WaylandState {
     keyboard: Option<WlKeyboard>,
 
     idle_timeout_ms: u32,
+    compositor_edge_seen: Arc<AtomicBool>,
 }
 
 impl WaylandState {
-    fn new(tx: mpsc::Sender<ManagerMsg>, idle_timeout_ms: u32) -> Self {
+    fn new(
+        tx: mpsc::Sender<ManagerMsg>,
+        idle_timeout_ms: u32,
+        compositor_edge_seen: Arc<AtomicBool>,
+    ) -> Self {
         Self {
             tx,
             idle_notifier: None,
@@ -68,6 +73,7 @@ impl WaylandState {
             pointer: None,
             keyboard: None,
             idle_timeout_ms,
+            compositor_edge_seen,
         }
     }
 
@@ -228,11 +234,13 @@ impl Dispatch<ExtIdleNotificationV1, ()> for WaylandState {
     ) {
         match event {
             IdleEvent::Resumed => {
+                state.compositor_edge_seen.store(true, Ordering::Relaxed);
                 // Note: niri may not send this reliably, but when it does, treat as activity.
                 state.emit_compositor_resumed();
                 state.emit_activity();
             }
             IdleEvent::Idled => {
+                state.compositor_edge_seen.store(true, Ordering::Relaxed);
                 state.emit_compositor_idled();
                 // Intentionally do NOT drive plan timing from this event.
                 // Tick remains the source of truth for time-based firing.
@@ -285,7 +293,9 @@ pub async fn run_wayland(
     let qh = event_queue.handle();
     let display = conn.display();
 
-    let mut state = WaylandState::new(tx, idle_timeout_ms);
+    let compositor_edge_seen = Arc::new(AtomicBool::new(false));
+    let tx_bootstrap = tx.clone();
+    let mut state = WaylandState::new(tx, idle_timeout_ms, compositor_edge_seen.clone());
 
     let _registry = display.get_registry(&qh, ());
     event_queue
@@ -296,6 +306,22 @@ pub async fn run_wayland(
         let notification = notifier.get_idle_notification(state.idle_timeout_ms, seat, &qh, ());
         state.notification = Some(notification);
         eventline::info!("wayland: ext_idle_notifier_v1 active");
+
+        let mut shutdown_bootstrap = shutdown.clone();
+        let edge_seen = compositor_edge_seen.clone();
+        let boot_delay_ms = idle_timeout_ms as u64 + 150;
+        tokio::spawn(async move {
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_millis(boot_delay_ms)) => {
+                    if !edge_seen.load(Ordering::Relaxed) {
+                        eventline::debug!("wayland: startup bootstrap compositor-idled");
+                        let now_ms = crate::core::utils::now_ms();
+                        let _ = tx_bootstrap.try_send(ManagerMsg::Event(Event::CompositorIdled { now_ms }));
+                    }
+                }
+                _ = shutdown_bootstrap.changed() => {}
+            }
+        });
     } else {
         eventline::warn!(
             "wayland: ext_idle_notifier_v1 or wl_seat missing; idle notifier disabled"

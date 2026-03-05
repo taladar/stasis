@@ -50,10 +50,11 @@ fn render_status(state: &State, cfg_opt: Option<&Config>, now_ms: u64) -> String
 
     match paused_reason {
         Some("locked") => out.push_str("State: locked\n"),
-        Some(r) => out.push_str(&format!("State: inhibited ({r})\n")),
+        Some("manual") => out.push_str("State: manual\n"),
+        Some(_) => out.push_str("State: inhibited\n"),
         None => {
             if state.debounce_pending() {
-                out.push_str("State: waiting for idle\n");
+                out.push_str("State: waiting\n");
             } else {
                 out.push_str("State: active\n");
             }
@@ -92,13 +93,13 @@ fn render_tooltip_compact(state: &State, cfg_opt: Option<&Config>, now_ms: u64) 
     if state.is_locked() {
         t.push_str("State: locked\n");
     } else if state.manually_paused() {
-        t.push_str("State: inhibited (manual)\n");
+        t.push_str("State: manual\n");
     } else if state.system_paused() {
-        t.push_str("State: inhibited (system)\n");
+        t.push_str("State: inhibited\n");
     } else if state.inhibitors_active() {
-        t.push_str("State: inhibited (inhibitors)\n");
+        t.push_str("State: inhibited\n");
     } else if state.debounce_pending() {
-        t.push_str("State: waiting for idle\n");
+        t.push_str("State: waiting\n");
     } else {
         t.push_str("State: active\n");
     }

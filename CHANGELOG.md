@@ -5,7 +5,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [1.1.0] - TBD
+## [1.1.1] - TBD
+
+### Changed
+
+- **Pre-action notification gating aligned with true idle state**
+  - Tick processing now hard-gates while `debounce_pending` is active, so `notify_before_action` and step actions cannot fire while Stasis is still waiting for a real idle edge.
+  - `notify_on_unpause` behavior remains scoped to `PauseExpired` (auto-resume from `stasis pause for/until`) and is not used for generic inhibitor transitions.
+
+- **`stasis info` state text simplification**
+  - Waybar/`--json` `text` now emits short, intuitive state labels: `waiting`, `active`, `inhibited`, `locked`, and `manual` (for explicit manual pause).
+  - Human-readable status/tooltip state lines were shortened to match (`State: waiting`, `State: manual`, etc.).
+
+- **Portal D-Bus inhibit tracking now uses request handles**
+  - Session portal inhibits are tracked per returned request handle (from `org.freedesktop.portal.Inhibit.Inhibit` method returns).
+  - `org.freedesktop.portal.Request.Close` now clears the matching handle rather than relying on coarse sender-only state.
+  - This reduces incorrect clear/retain behavior when browsers recycle inhibit requests.
+
+- **Runtime browser-call close guard**
+  - On portal handle close edges, Stasis now applies a browser source-output guard before final inactive transitions.
+  - This helps avoid mid-call inhibit drops when browser/portal close behavior is noisy.
+
+---
+
+## [1.1.0] - 2026-03-05
 
 ### Changed
 
@@ -67,6 +90,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added a `profile.release` configuration in `Cargo.toml` tuned for smaller binaries (`opt-level = "z"`, `lto`, single codegen unit, symbol stripping, and `panic = "abort"`).
 
 ### Fixed
+
+- Fixed a browser-activity edge case at timestamp `0` where startup idle-edge handling could be skipped due to inclusive activity expiry comparison.
 
 - Eliminated excessive `done: event#…` log lines during normal operation.
 - Prevented Waybar polling from flooding daemon logs.
