@@ -71,6 +71,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Eliminated excessive `done: event#…` log lines during normal operation.
 - Prevented Waybar polling from flooding daemon logs.
 - Reduced log churn under steady-state idle operation.
+- Fixed lingering daemon/zombie behavior when started from a terminal and the terminal session closed by handling `SIGHUP` and `SIGTERM` as clean shutdown signals (not only `SIGINT`).
 - Fixed inhibitor count staying permanently elevated after leaving a Discord call in any browser.
 - Fixed Firefox counting one playing tab as two due to PipeWire creating duplicate sink-input blocks.
 - Fixed Chromium/Vivaldi Discord zombie stream holding `local=1` after a call ends.
