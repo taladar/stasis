@@ -52,7 +52,7 @@ impl Daemon {
         // (ticks, input edges, D-Bus signals) — 256 was wasted reservation.
         let (tx, mut rx) = mpsc::channel::<ManagerMsg>(32);
 
-        if let Err(e) = crate::ipc::server::spawn_ipc_server(tx.clone()).await {
+        if let Err(e) = crate::ipc::server::spawn_ipc_server(tx.clone(), self.verbose).await {
             eventline::warn!("ipc: failed to start: {}", e);
         }
 

@@ -9,7 +9,7 @@ use tokio::{
 
 use crate::core::manager_msg::ManagerMsg;
 
-pub async fn spawn_ipc_server(tx: mpsc::Sender<ManagerMsg>) -> Result<(), String> {
+pub async fn spawn_ipc_server(tx: mpsc::Sender<ManagerMsg>, verbose: bool) -> Result<(), String> {
     let path = crate::ipc::socket_path()?;
 
     if let Some(parent) = path.parent() {
@@ -50,9 +50,14 @@ pub async fn spawn_ipc_server(tx: mpsc::Sender<ManagerMsg>) -> Result<(), String
                     return;
                 }
 
-                eventline::debug!("ipc: command: {}", cmd);
-
-                let response = crate::ipc::router::route_command(&cmd, &tx).await;
+                let response = if verbose {
+                    eventline::scope!("ipc", {
+                        eventline::debug!("ipc: command: {}", cmd);
+                        crate::ipc::router::route_command(&cmd, &tx).await
+                    })
+                } else {
+                    crate::ipc::router::route_command(&cmd, &tx).await
+                };
 
                 if let Err(e) = stream.write_all(response.as_bytes()).await {
                     eventline::warn!("ipc: write failed: {}", e);
