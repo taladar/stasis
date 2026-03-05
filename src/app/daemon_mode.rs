@@ -4,11 +4,42 @@
 use crate::daemon::Daemon;
 use eventline::journal::rotation::LogPolicy;
 use eventline::{FileSetup, RunHeader, Setup};
+use std::future::pending;
 use std::path::PathBuf;
 
 use crate::cli::Args;
 
 type AnyError = Box<dyn std::error::Error + Send + Sync>;
+
+#[cfg(unix)]
+async fn wait_for_shutdown_signal() -> String {
+    use tokio::signal::unix::{SignalKind, signal};
+
+    let mut sigterm = signal(SignalKind::terminate()).ok();
+    let mut sighup = signal(SignalKind::hangup()).ok();
+
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => "SIGINT".to_string(),
+        _ = async {
+            match sigterm.as_mut() {
+                Some(stream) => { let _ = stream.recv().await; }
+                None => pending::<()>().await,
+            }
+        } => "SIGTERM".to_string(),
+        _ = async {
+            match sighup.as_mut() {
+                Some(stream) => { let _ = stream.recv().await; }
+                None => pending::<()>().await,
+            }
+        } => "SIGHUP".to_string(),
+    }
+}
+
+#[cfg(not(unix))]
+async fn wait_for_shutdown_signal() -> String {
+    let _ = tokio::signal::ctrl_c().await;
+    "SIGINT".to_string()
+}
 
 pub async fn run(args: Args) -> Result<(), AnyError> {
     let file = crate::app::platform::default_log_path().map(|path| {
@@ -130,8 +161,8 @@ pub async fn run(args: Args) -> Result<(), AnyError> {
             Ok(())
         }
 
-        _ = tokio::signal::ctrl_c() => {
-            eventline::info!("received Ctrl+C, shutting down");
+        sig = wait_for_shutdown_signal() => {
+            eventline::info!("received {}, shutting down", sig);
             let _ = shutdown_tx.send(true);
 
             match daemon_task.await {
