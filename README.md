@@ -115,11 +115,14 @@ security.pam.services.swaylock = {};
 ### From Source
 
 Dependencies:
-- rust / cargo
-- wayland (for native input detection)
-- dbus (optional, for lid events, suspend/resume, and session inhibit handling)
-- libnotify (optional, for desktop notifications)
-- pulseaudio or pipewire-pulse (optional, for audio/media detection)
+- rust / cargo (build)
+- wayland (runtime)
+- dbus (runtime, strongly recommended; required for full feature set)
+  - used for session inhibit handling (`enable_dbus_inhibit`)
+  - used for portal/browser inhibit traffic
+  - used for lid events and suspend/resume integration
+- pulseaudio or pipewire-pulse (runtime, recommended for media/call detection via `pactl`)
+- libnotify (optional, desktop notifications)
 
 Build & install:
 
