@@ -26,6 +26,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - On portal handle close edges, Stasis now applies a browser source-output guard before final inactive transitions.
   - This helps avoid mid-call inhibit drops when browser/portal close behavior is noisy.
 
+### Notes
+
+- **Web Discord limitation (no mic attached)**
+  - Browser/portal may still uninhibit during a Discord web call when no microphone source-output is attached.
+  - This behavior currently cannot be fixed reliably from Stasis side alone.
+
+- **Startup media gating investigation**
+  - Investigating a future startup-only audio gate so pre-existing playback at daemon start can keep Stasis paused until activity is clearly inactive.
+
 ---
 
 ## [1.1.0] - 2026-03-05
