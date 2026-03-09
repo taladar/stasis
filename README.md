@@ -201,7 +201,7 @@ Important separation:
 
 ---
 
-## Compositor Support
+## Compositor Support (app-inhibit)
 
 Stasis integrates with each compositor's available IPC and standard Wayland protocols.
 
