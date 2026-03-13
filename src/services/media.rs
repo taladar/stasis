@@ -1,12 +1,10 @@
 // Author: Dustin Pilgrim
-// License: GPLv3
+// License: MIT
 
-use std::collections::HashSet;
-use std::env;
+use std::collections::HashMap;
 use std::process::Command;
 use std::time::Duration;
 
-use serde_json::Value;
 use tokio::sync::{mpsc, watch};
 
 use crate::core::config::Pattern;
@@ -21,7 +19,8 @@ pub struct MediaRules {
     pub media_blacklist: Vec<Pattern>,
 }
 
-/// Spawnable task: polls compositor idle-inhibitor state for non-browser media and emits events on change.
+/// Spawnable task: polls PulseAudio/PipeWire sink-input state for non-browser,
+/// non-game media and emits events on change.
 pub async fn run_media(tx: mpsc::Sender<ManagerMsg>, mut rules_rx: watch::Receiver<MediaRules>) {
     let initial = rules_rx.borrow().clone();
     let mut last_epoch = initial.epoch;
@@ -31,7 +30,7 @@ pub async fn run_media(tx: mpsc::Sender<ManagerMsg>, mut rules_rx: watch::Receiv
         .with_poll_interval_ms(500);
 
     eventline::info!(
-        "media: started (monitor_media={}, ignore_remote_media={}, blacklist_len={}, backend={}) [idle-inhibitor-truth]",
+        "media: started (monitor_media={}, ignore_remote_media={}, blacklist_len={}, backend={}) [pactl-sink-input-truth]",
         initial.monitor_media,
         initial.ignore_remote_media,
         svc.blacklist_len(),
@@ -53,7 +52,7 @@ pub async fn run_media(tx: mpsc::Sender<ManagerMsg>, mut rules_rx: watch::Receiv
     }
 
     let sleep_ms = 250u64;
-    let mut last_enabled: bool = initial.monitor_media;
+    let mut last_enabled = initial.monitor_media;
 
     loop {
         tokio::select! {
@@ -154,8 +153,7 @@ pub struct MediaService {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MediaBackend {
-    Hyprland,
-    Niri,
+    Pactl,
     None,
 }
 
@@ -184,8 +182,7 @@ impl MediaService {
 
     pub fn backend_name(&self) -> &'static str {
         match self.backend {
-            MediaBackend::Hyprland => "hyprland",
-            MediaBackend::Niri => "niri",
+            MediaBackend::Pactl => "pactl",
             MediaBackend::None => "none",
         }
     }
@@ -219,26 +216,18 @@ impl MediaService {
         self.last_poll_ms = now_ms;
 
         let count = match self.backend {
-            MediaBackend::Hyprland => match hyprland_idle_inhibitor_count(&self.media_blacklist) {
-                Ok(n) => n,
-                Err(e) => {
-                    eventline::warn!(
-                        "media: hyprland idle-inhibitor query failed (keeping previous): {}",
-                        e
-                    );
-                    self.last_count.unwrap_or(0)
+            MediaBackend::Pactl => {
+                match pactl_sink_input_count(self.ignore_remote_media, &self.media_blacklist) {
+                    Ok(n) => n,
+                    Err(e) => {
+                        eventline::warn!(
+                            "media: pactl sink-input query failed (keeping previous): {}",
+                            e
+                        );
+                        self.last_count.unwrap_or(0)
+                    }
                 }
-            },
-            MediaBackend::Niri => match niri_idle_inhibitor_count(&self.media_blacklist) {
-                Ok(n) => n,
-                Err(e) => {
-                    eventline::warn!(
-                        "media: niri idle-inhibitor query failed (keeping previous): {}",
-                        e
-                    );
-                    self.last_count.unwrap_or(0)
-                }
-            },
+            }
             MediaBackend::None => 0,
         };
 
@@ -287,171 +276,180 @@ impl MediaService {
 }
 
 fn detect_backend() -> MediaBackend {
-    if env::var("HYPRLAND_INSTANCE_SIGNATURE").is_ok() {
-        return MediaBackend::Hyprland;
-    }
-
-    if env::var("NIRI_SOCKET").is_ok() {
-        return MediaBackend::Niri;
-    }
-
-    if let Ok(desktop) = env::var("XDG_CURRENT_DESKTOP") {
-        let d = desktop.to_lowercase();
-        if d.contains("hyprland") {
-            return MediaBackend::Hyprland;
-        }
-        if d.contains("niri") {
-            return MediaBackend::Niri;
-        }
+    if pactl_available() {
+        return MediaBackend::Pactl;
     }
 
     MediaBackend::None
 }
 
-fn hyprland_idle_inhibitor_count(media_blacklist: &[Pattern]) -> Result<u64, String> {
-    let out = Command::new("hyprctl")
-        .args(["clients", "-j"])
+fn pactl_available() -> bool {
+    Command::new("pactl")
+        .arg("info")
         .output()
-        .map_err(|e| format!("hyprctl spawn failed: {e}"))?;
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+fn pactl_sink_input_count(
+    ignore_remote_media: bool,
+    media_blacklist: &[Pattern],
+) -> Result<u64, String> {
+    let out = Command::new("pactl")
+        .args(["list", "sink-inputs"])
+        .output()
+        .map_err(|e| format!("pactl spawn failed: {e}"))?;
 
     if !out.status.success() {
         let err = String::from_utf8_lossy(&out.stderr);
-        return Err(format!("hyprctl clients -j failed: {}", err.trim()));
+        return Err(format!("pactl list sink-inputs failed: {}", err.trim()));
     }
 
-    let v: Value = serde_json::from_slice(&out.stdout)
-        .map_err(|e| format!("hyprctl json parse failed: {e}"))?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    if text.trim().is_empty() {
+        return Ok(0);
+    }
 
-    let arr = v
-        .as_array()
-        .ok_or_else(|| "hyprctl json: expected array".to_string())?;
+    let mut count = 0u64;
+    let mut block = String::new();
+    let mut saw_header = false;
 
-    let mut seen: HashSet<String> = HashSet::new();
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        let is_header =
+            trimmed.starts_with("Sink Input #") || trimmed.starts_with("SinkInput #");
 
-    for item in arr {
-        if !client_is_idle_inhibiting(item) {
+        if is_header {
+            if saw_header
+                && sink_input_block_counts(&block, ignore_remote_media, media_blacklist)
+            {
+                count += 1;
+            }
+            block.clear();
+            saw_header = true;
+        }
+
+        if saw_header {
+            block.push_str(line);
+            block.push('\n');
+        }
+    }
+
+    if saw_header && sink_input_block_counts(&block, ignore_remote_media, media_blacklist) {
+        count += 1;
+    }
+
+    Ok(count)
+}
+
+fn sink_input_block_counts(
+    block: &str,
+    ignore_remote_media: bool,
+    media_blacklist: &[Pattern],
+) -> bool {
+    let props = parse_pactl_properties(block);
+
+    if props.is_empty() {
+        return false;
+    }
+
+    if sink_input_is_corked(block) {
+        return false;
+    }
+
+    if sink_input_is_muted(block) {
+        return false;
+    }
+
+    if sink_input_is_browser(&props) {
+        return false;
+    }
+
+    if sink_input_is_game(&props) {
+        return false;
+    }
+
+    if sink_input_is_blacklisted(media_blacklist, &props) {
+        return false;
+    }
+
+    if ignore_remote_media && sink_input_is_remote(&props) {
+        return false;
+    }
+
+    true
+}
+
+fn sink_input_is_corked(block: &str) -> bool {
+    block.lines().any(|line| {
+        let t = line.trim();
+        t.eq_ignore_ascii_case("Corked: yes")
+    })
+}
+
+fn sink_input_is_muted(block: &str) -> bool {
+    block.lines().any(|line| {
+        let t = line.trim();
+        t.eq_ignore_ascii_case("Mute: yes")
+    })
+}
+
+fn parse_pactl_properties(block: &str) -> HashMap<String, String> {
+    let mut props = HashMap::new();
+    let mut in_properties = false;
+
+    for line in block.lines() {
+        let trimmed = line.trim();
+
+        if trimmed == "Properties:" {
+            in_properties = true;
             continue;
         }
 
-        if is_browser_client(item) {
+        if !in_properties {
             continue;
         }
 
-        if is_blacklisted_client(media_blacklist, item) {
+        if trimmed.is_empty() {
             continue;
         }
 
-        let key = client_key(item);
-        seen.insert(key);
-    }
-
-    Ok(seen.len() as u64)
-}
-
-fn niri_idle_inhibitor_count(media_blacklist: &[Pattern]) -> Result<u64, String> {
-    let _ = media_blacklist;
-    Ok(0)
-}
-
-fn client_key(item: &Value) -> String {
-    if let Some(addr) = get_str(item, "address") {
-        return format!("addr:{}", addr.to_lowercase());
-    }
-
-    if let Some(pid) = item.get("pid").and_then(|v| v.as_i64()) {
-        return format!("pid:{pid}");
-    }
-
-    let class = get_str(item, "class").unwrap_or("").to_lowercase();
-    let title = get_str(item, "title").unwrap_or("").to_lowercase();
-    if !class.is_empty() || !title.is_empty() {
-        return format!("{class}:{title}");
-    }
-
-    "unknown".to_string()
-}
-
-fn client_is_idle_inhibiting(item: &Value) -> bool {
-    const KEYS: &[&str] = &[
-        "inhibitingIdle",
-        "inhibitingidle",
-        "idleInhibit",
-        "idle_inhibit",
-        "isIdleInhibited",
-        "is_idle_inhibited",
-    ];
-
-    if KEYS
-        .iter()
-        .any(|k| item.get(k).is_some_and(value_is_truthy))
-    {
-        return true;
-    }
-
-    item.get("idleInhibitor").is_some_and(value_is_truthy)
-}
-
-fn value_is_truthy(v: &Value) -> bool {
-    if let Some(b) = v.as_bool() {
-        return b;
-    }
-
-    if let Some(n) = v.as_i64() {
-        return n > 0;
-    }
-
-    if let Some(n) = v.as_u64() {
-        return n > 0;
-    }
-
-    if let Some(s) = v.as_str() {
-        let t = s.trim().to_lowercase();
-        if t.is_empty() {
-            return false;
+        if !line.starts_with('\t') && !line.starts_with(' ') {
+            break;
         }
-        return !matches!(t.as_str(), "0" | "false" | "off" | "none" | "no");
+
+        let Some((k, v)) = trimmed.split_once('=') else {
+            continue;
+        };
+
+        let key = k.trim().to_ascii_lowercase();
+        let value = v.trim().trim_matches('"').to_string();
+
+        props.insert(key, value);
     }
 
-    if let Some(obj) = v.as_object() {
-        if obj.values().any(value_is_truthy) {
-            return true;
-        }
-    }
-
-    if let Some(arr) = v.as_array() {
-        if arr.iter().any(value_is_truthy) {
-            return true;
-        }
-    }
-
-    false
+    props
 }
 
-fn is_blacklisted_client(blacklist: &[Pattern], item: &Value) -> bool {
+fn sink_input_is_blacklisted(
+    blacklist: &[Pattern],
+    props: &HashMap<String, String>,
+) -> bool {
     if blacklist.is_empty() {
         return false;
     }
 
-    let class = get_str(item, "class").unwrap_or("");
-    let initial_class = get_str(item, "initialClass").unwrap_or("");
-    let title = get_str(item, "title").unwrap_or("");
-    let initial_title = get_str(item, "initialTitle").unwrap_or("");
-    let hay_lc = format!("{class} {initial_class} {title} {initial_title}").to_lowercase();
+    let hay_lc = sink_input_haystack(props);
 
     blacklist.iter().any(|p| p.matches_lc(&hay_lc))
 }
 
-fn is_browser_client(item: &Value) -> bool {
-    let class = get_str(item, "class").unwrap_or("");
-    let initial_class = get_str(item, "initialClass").unwrap_or("");
-    let title = get_str(item, "title").unwrap_or("");
-    let initial_title = get_str(item, "initialTitle").unwrap_or("");
-    let hay_lc = format!("{class} {initial_class} {title} {initial_title}").to_lowercase();
-
+fn sink_input_is_browser(props: &HashMap<String, String>) -> bool {
     const NEEDLES: &[&str] = &[
         "firefox",
         "chromium",
         "google-chrome",
+        "google chrome",
         "chrome",
         "brave",
         "vivaldi",
@@ -460,15 +458,101 @@ fn is_browser_client(item: &Value) -> bool {
         "opera",
         "tor browser",
         "zen browser",
+        "zen-browser",
         "waterfox",
         "librewolf",
     ];
 
-    NEEDLES.iter().any(|n| hay_lc.contains(n))
+    haystack_contains_any(&sink_input_haystack(props), NEEDLES)
 }
 
-fn get_str<'a>(item: &'a Value, key: &str) -> Option<&'a str> {
-    item.get(key).and_then(|v| v.as_str())
+fn sink_input_is_game(props: &HashMap<String, String>) -> bool {
+    const NEEDLES: &[&str] = &[
+        "steam",
+        "gamescope",
+        "lutris",
+        "heroic",
+        "prismlauncher",
+        "minecraft",
+        "wine",
+        "proton",
+        "retroarch",
+        "dolphin-emu",
+        "pcsx2",
+        "rpcs3",
+        "citra",
+        "yuzu",
+        "ryujinx",
+    ];
+
+    haystack_contains_any(&sink_input_haystack(props), NEEDLES)
+}
+
+fn sink_input_is_remote(props: &HashMap<String, String>) -> bool {
+    const NEEDLES: &[&str] = &[
+        "spotify connect",
+        "chromecast",
+        "cast",
+        "airplay",
+        "raop",
+        "dlna",
+        "upnp",
+        "snapcast",
+        "shairport",
+        "remote",
+        "network stream",
+        "http://",
+        "https://",
+        "rtsp://",
+        "rtmp://",
+        "mms://",
+        "icy://",
+    ];
+
+    haystack_contains_any(&sink_input_haystack(props), NEEDLES)
+}
+
+fn sink_input_haystack(props: &HashMap<String, String>) -> String {
+    let ordered_keys = [
+        "application.name",
+        "application.process.binary",
+        "application.process.executable",
+        "application.icon_name",
+        "media.name",
+        "media.title",
+        "media.artist",
+        "media.filename",
+        "media.role",
+        "node.name",
+        "node.description",
+        "application.id",
+        "app.name",
+    ];
+
+    let mut parts = Vec::new();
+
+    for key in ordered_keys {
+        if let Some(v) = props.get(key) {
+            if !v.trim().is_empty() {
+                parts.push(v.trim().to_string());
+            }
+        }
+    }
+
+    for (k, v) in props {
+        if ordered_keys.contains(&k.as_str()) {
+            continue;
+        }
+        if !v.trim().is_empty() {
+            parts.push(format!("{k} {}", v.trim()));
+        }
+    }
+
+    parts.join(" ").to_lowercase()
+}
+
+fn haystack_contains_any(hay_lc: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|n| hay_lc.contains(n))
 }
 
 fn pattern_key(p: &Pattern) -> String {
@@ -482,6 +566,7 @@ fn patterns_same(a: &[Pattern], b: &[Pattern]) -> bool {
     if a.len() != b.len() {
         return false;
     }
+
     a.iter()
         .map(pattern_key)
         .zip(b.iter().map(pattern_key))
