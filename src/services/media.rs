@@ -361,7 +361,18 @@ fn sink_input_block_counts(
         return false;
     }
 
+    // Browser/media-session ownership belongs in dbus.rs. media.rs should only
+    // act as a narrow local-audio fallback, so aggressively exclude browser,
+    // TTS/synthetic, and other system-ish streams here.
     if sink_input_is_browser(&props) {
+        return false;
+    }
+
+    if sink_input_is_synthetic_or_tts(&props) {
+        return false;
+    }
+
+    if sink_input_is_systemish(&props) {
         return false;
     }
 
@@ -429,6 +440,43 @@ fn parse_pactl_properties(block: &str) -> HashMap<String, String> {
     }
 
     props
+}
+
+fn sink_input_is_synthetic_or_tts(props: &HashMap<String, String>) -> bool {
+    const NEEDLES: &[&str] = &[
+        "speech-dispatcher",
+        "speech dispatcher",
+        "speech-dispatcher-dummy",
+        "sd_dummy",
+        "speechd",
+        "espeak",
+        "espeak-ng",
+        "festival",
+        "flite",
+        "piper",
+        "rhvoice",
+        "orca",
+        "screen reader",
+        "accessibility",
+    ];
+
+    haystack_contains_any(&sink_input_haystack(props), NEEDLES)
+}
+
+fn sink_input_is_systemish(props: &HashMap<String, String>) -> bool {
+    const NEEDLES: &[&str] = &[
+        "event sound",
+        "notification",
+        "system sound",
+        "alert",
+        "bell",
+        "beep",
+        "xdg-desktop-portal",
+        "wireplumber",
+        "pipewire",
+    ];
+
+    haystack_contains_any(&sink_input_haystack(props), NEEDLES)
 }
 
 fn sink_input_is_blacklisted(
