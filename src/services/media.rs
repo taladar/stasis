@@ -1,5 +1,5 @@
 // Author: Dustin Pilgrim
-// License: MIT
+// License: GPLv3
 
 use std::collections::HashSet;
 use std::env;

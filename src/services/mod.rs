@@ -1,5 +1,5 @@
 // Author: Dustin Pilgrim
-// License: MIT
+// License: GPLv3
 
 pub mod app_inhibit;
 pub mod dbus;

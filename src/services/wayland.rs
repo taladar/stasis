@@ -1,6 +1,6 @@
 // Author: Dustin Pilgrim
-// License: MIT
-//
+// License: GPLv3
+
 use rustix::fd::AsFd;
 use std::os::fd::BorrowedFd;
 use std::sync::{

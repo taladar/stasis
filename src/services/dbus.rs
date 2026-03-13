@@ -301,27 +301,47 @@ async fn tracker_clear_portal_handle(
     sender: &str,
     handle: &str,
 ) {
+    // Check the runtime safeguard *before* mutating tracker state.
+    //
+    // If browser source-capture is still active, keep the portal handle tracked
+    // so we still have a future path to emit BrowserInactive when the real close
+    // edge arrives later (or the sender disappears).
+    let source_capture_active = tokio::task::spawn_blocking(browser_source_capture_active_now)
+        .await
+        .unwrap_or(false);
+
+    if source_capture_active {
+        let t = tracker.lock().await;
+        let total = t.total();
+        let sender_handles = t
+            .active_senders
+            .get(sender)
+            .map(|s| s.portal_handles.len())
+            .unwrap_or(0);
+        drop(t);
+
+        eventline::debug!(
+            "dbus: portal close deferred (browser source capture still active, sender={}, total={}, sender_handles={}, handle={})",
+            sender,
+            total,
+            sender_handles,
+            handle
+        );
+        return;
+    }
+
     let mut t = tracker.lock().await;
     let old_total = t.total();
     let removed = t.clear_portal_handle(sender, handle);
     let new_total = t.total();
+    let sender_handles = t
+        .active_senders
+        .get(sender)
+        .map(|s| s.portal_handles.len())
+        .unwrap_or(0);
     drop(t);
 
     if removed && old_total > 0 && new_total == 0 {
-        // Runtime safeguard for call sessions: if browser source-capture is
-        // still active, keep inhibit even when portal closes a handle.
-        let source_capture_active =
-            tokio::task::spawn_blocking(browser_source_capture_active_now)
-                .await
-                .unwrap_or(false);
-        if source_capture_active {
-            eventline::debug!(
-                "dbus: portal close suppressed (browser source capture still active)",
-            );
-            sink.push(Event::BrowserActivity { now_ms: now_ms() });
-            return;
-        }
-
         eventline::debug!(
             "dbus: inhibit cleared (portal sender={}, handle={})",
             sender,
@@ -329,18 +349,17 @@ async fn tracker_clear_portal_handle(
         );
         sink.push(Event::BrowserInactive { now_ms: now_ms() });
     } else if removed {
-        let sender_handles = tracker
-            .lock()
-            .await
-            .active_senders
-            .get(sender)
-            .map(|s| s.portal_handles.len())
-            .unwrap_or(0);
         eventline::debug!(
             "dbus: portal handle closed (sender={}, remaining_total={}, sender_handles={})",
             sender,
             new_total,
             sender_handles
+        );
+    } else {
+        eventline::debug!(
+            "dbus: portal handle close ignored (sender={}, handle={})",
+            sender,
+            handle
         );
     }
 }
