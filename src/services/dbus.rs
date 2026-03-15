@@ -1,14 +1,13 @@
 // Author: Dustin Pilgrim
 // License: MIT
 
-use std::collections::HashMap;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::process::Command;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use futures::StreamExt;
-use tokio::sync::{Mutex, watch};
+use tokio::sync::{watch, Mutex};
 use zbus::{Connection, MatchRule, Proxy};
 
 use crate::core::events::Event;
@@ -28,7 +27,7 @@ pub trait EventSink: Send + Sync + 'static {
 /// `enable_dbus_inhibit` gates session-bus inhibit monitoring:
 /// - org.freedesktop.ScreenSaver Inhibit/UnInhibit
 /// - org.gnome.SessionManager Inhibit/Uninhibit
-/// - org.freedesktop.portal.Inhibit Inhibit/CreateMonitor + Request.Close
+/// - org.freedesktop.portal.Inhibit Inhibit + Request.Close
 ///
 /// Lid events via UPower are always monitored when system bus is available.
 ///
@@ -63,12 +62,17 @@ fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
-// Track portal inhibitors by request handle per portal spec:
-// Inhibit() -> returned handle -> Request.Close(handle) clears that inhibit.
+// Track inhibitors by unique D-Bus sender.
+// Legacy APIs are cookie-based. Portal APIs are request-handle based.
 #[derive(Debug, Default)]
 struct DbusInhibitTracker {
     // Active inhibit state keyed by unique D-Bus sender name (e.g. ":1.29").
     active_senders: HashMap<String, SenderInhibitState>,
+
+    // Pending legacy Inhibit method-call serials per sender, waiting for
+    // method-return that carries the cookie.
+    pending_legacy_calls: HashMap<String, HashSet<u32>>,
+
     // Pending portal Inhibit method-call serials per sender, waiting for
     // method-return that carries the request handle.
     pending_portal_calls: HashMap<String, HashSet<u32>>,
@@ -76,8 +80,9 @@ struct DbusInhibitTracker {
 
 #[derive(Debug, Default)]
 struct SenderInhibitState {
-    // Legacy ScreenSaver / SessionManager inhibits from this sender.
-    legacy_count: u32,
+    // Legacy ScreenSaver / SessionManager inhibit cookies active for this sender.
+    legacy_cookies: HashSet<u32>,
+
     // Portal Request handles currently active for this sender.
     portal_handles: HashSet<String>,
 }
@@ -87,35 +92,71 @@ impl DbusInhibitTracker {
         self.active_senders.len()
     }
 
-    fn mark_legacy_active(&mut self, sender: &str) {
-        let state = self.active_senders.entry(sender.to_string()).or_default();
-        state.legacy_count = state.legacy_count.saturating_add(1);
+    fn mark_legacy_call(&mut self, sender: &str, serial: u32) {
+        self.pending_legacy_calls
+            .entry(sender.to_string())
+            .or_default()
+            .insert(serial);
     }
 
-    fn clear_legacy(&mut self, sender: &str) {
-        let should_remove = if let Some(state) = self.active_senders.get_mut(sender) {
-            if state.legacy_count > 0 {
-                state.legacy_count -= 1;
-            }
-            state.legacy_count == 0 && state.portal_handles.is_empty()
+    fn clear_legacy_call(&mut self, sender: &str, serial: u32) {
+        let remove_sender = if let Some(set) = self.pending_legacy_calls.get_mut(sender) {
+            set.remove(&serial);
+            set.is_empty()
         } else {
             false
         };
 
-        if should_remove {
-            self.active_senders.remove(sender);
+        if remove_sender {
+            self.pending_legacy_calls.remove(sender);
         }
     }
 
-    #[cfg(test)]
-    fn mark_portal_active(&mut self, sender: &str) {
-        self.mark_portal_call(sender, 0);
+    fn confirm_legacy_cookie(&mut self, sender: &str, reply_serial: u32, cookie: u32) -> bool {
+        let had_pending = self
+            .pending_legacy_calls
+            .get(sender)
+            .is_some_and(|set| set.contains(&reply_serial));
+        if !had_pending {
+            return false;
+        }
+
+        self.clear_legacy_call(sender, reply_serial);
+        let state = self.active_senders.entry(sender.to_string()).or_default();
+        state.legacy_cookies.insert(cookie)
+    }
+
+    fn clear_legacy_cookie(&mut self, sender: &str, cookie: u32) -> bool {
+        let removed = if let Some(state) = self.active_senders.get_mut(sender) {
+            state.legacy_cookies.remove(&cookie)
+        } else {
+            false
+        };
+
+        if removed {
+            self.drop_sender_if_empty(sender);
+        }
+
+        removed
     }
 
     #[cfg(test)]
-    fn clear_portal(&mut self, sender: &str) {
-        // Legacy helper retained for tests; prefer clear_portal_handle in runtime.
-        let _ = self.clear_any_portal_handle(sender);
+    fn mark_legacy_active(&mut self, sender: &str) {
+        let state = self.active_senders.entry(sender.to_string()).or_default();
+        state.legacy_cookies.insert(0);
+    }
+
+    #[cfg(test)]
+    fn clear_legacy(&mut self, sender: &str) {
+        let removed = if let Some(state) = self.active_senders.get_mut(sender) {
+            state.legacy_cookies.remove(&0)
+        } else {
+            false
+        };
+
+        if removed {
+            self.drop_sender_if_empty(sender);
+        }
     }
 
     fn mark_portal_call(&mut self, sender: &str, serial: u32) {
@@ -148,8 +189,7 @@ impl DbusInhibitTracker {
 
         self.clear_portal_call(sender, reply_serial);
         let state = self.active_senders.entry(sender.to_string()).or_default();
-        let inserted = state.portal_handles.insert(handle.to_string());
-        inserted
+        state.portal_handles.insert(handle.to_string())
     }
 
     fn clear_portal_handle(&mut self, sender: &str, handle: &str) -> bool {
@@ -164,6 +204,16 @@ impl DbusInhibitTracker {
         }
 
         removed
+    }
+
+    #[cfg(test)]
+    fn mark_portal_active(&mut self, sender: &str) {
+        self.mark_portal_call(sender, 0);
+    }
+
+    #[cfg(test)]
+    fn clear_portal(&mut self, sender: &str) {
+        let _ = self.clear_any_portal_handle(sender);
     }
 
     #[cfg(test)]
@@ -189,7 +239,8 @@ impl DbusInhibitTracker {
         let should_remove = self
             .active_senders
             .get(sender)
-            .is_some_and(|s| s.legacy_count == 0 && s.portal_handles.is_empty());
+            .is_some_and(|s| s.legacy_cookies.is_empty() && s.portal_handles.is_empty());
+
         if should_remove {
             self.active_senders.remove(sender);
         }
@@ -197,45 +248,118 @@ impl DbusInhibitTracker {
 
     fn remove_sender(&mut self, sender: &str) {
         self.active_senders.remove(sender);
+        self.pending_legacy_calls.remove(sender);
         self.pending_portal_calls.remove(sender);
     }
 }
 
-async fn tracker_mark_legacy_active(
+async fn tracker_register_legacy_call(
+    tracker: &Arc<Mutex<DbusInhibitTracker>>,
+    sender: &str,
+    serial: u32,
+) {
+    let mut t = tracker.lock().await;
+    t.mark_legacy_call(sender, serial);
+}
+
+async fn tracker_confirm_legacy_cookie(
     tracker: &Arc<Mutex<DbusInhibitTracker>>,
     sink: &Arc<dyn EventSink>,
     sender: &str,
+    reply_serial: u32,
+    cookie: u32,
 ) {
     let mut t = tracker.lock().await;
     let old_total = t.total();
-    t.mark_legacy_active(sender);
+    let newly_inserted = t.confirm_legacy_cookie(sender, reply_serial, cookie);
     let new_total = t.total();
+    let sender_legacy = t
+        .active_senders
+        .get(sender)
+        .map(|s| s.legacy_cookies.len())
+        .unwrap_or(0);
+    let sender_handles = t
+        .active_senders
+        .get(sender)
+        .map(|s| s.portal_handles.len())
+        .unwrap_or(0);
     drop(t);
 
-    if old_total == 0 && new_total > 0 {
+    if newly_inserted && old_total == 0 && new_total > 0 {
         eventline::debug!(
-            "dbus: inhibit active (legacy sender={}, total={})",
+            "dbus: inhibit active (legacy sender={}, total={}, sender_legacy={}, sender_handles={}, cookie={})",
             sender,
-            new_total
+            new_total,
+            sender_legacy,
+            sender_handles,
+            cookie
         );
         sink.push(Event::BrowserActivity { now_ms: now_ms() });
+    } else if newly_inserted {
+        eventline::debug!(
+            "dbus: legacy cookie added (sender={}, total={}, sender_legacy={}, sender_handles={}, cookie={})",
+            sender,
+            new_total,
+            sender_legacy,
+            sender_handles,
+            cookie
+        );
     }
 }
 
-async fn tracker_clear_legacy(
+async fn tracker_clear_legacy_call(
+    tracker: &Arc<Mutex<DbusInhibitTracker>>,
+    sender: &str,
+    serial: u32,
+) {
+    let mut t = tracker.lock().await;
+    t.clear_legacy_call(sender, serial);
+}
+
+async fn tracker_clear_legacy_cookie(
     tracker: &Arc<Mutex<DbusInhibitTracker>>,
     sink: &Arc<dyn EventSink>,
     sender: &str,
+    cookie: u32,
 ) {
     let mut t = tracker.lock().await;
     let old_total = t.total();
-    t.clear_legacy(sender);
+    let removed = t.clear_legacy_cookie(sender, cookie);
     let new_total = t.total();
+    let sender_legacy = t
+        .active_senders
+        .get(sender)
+        .map(|s| s.legacy_cookies.len())
+        .unwrap_or(0);
+    let sender_handles = t
+        .active_senders
+        .get(sender)
+        .map(|s| s.portal_handles.len())
+        .unwrap_or(0);
     drop(t);
 
-    if old_total > 0 && new_total == 0 {
-        eventline::debug!("dbus: inhibit cleared (legacy sender={})", sender);
+    if removed && old_total > 0 && new_total == 0 {
+        eventline::debug!(
+            "dbus: inhibit cleared (legacy sender={}, cookie={})",
+            sender,
+            cookie
+        );
         sink.push(Event::BrowserInactive { now_ms: now_ms() });
+    } else if removed {
+        eventline::debug!(
+            "dbus: legacy cookie cleared (sender={}, total={}, sender_legacy={}, sender_handles={}, cookie={})",
+            sender,
+            new_total,
+            sender_legacy,
+            sender_handles,
+            cookie
+        );
+    } else {
+        eventline::debug!(
+            "dbus: legacy cookie clear ignored (sender={}, cookie={})",
+            sender,
+            cookie
+        );
     }
 }
 
@@ -264,23 +388,30 @@ async fn tracker_confirm_portal_handle(
         .get(sender)
         .map(|s| s.portal_handles.len())
         .unwrap_or(0);
+    let sender_legacy = t
+        .active_senders
+        .get(sender)
+        .map(|s| s.legacy_cookies.len())
+        .unwrap_or(0);
     drop(t);
 
     if newly_inserted && old_total == 0 && new_total > 0 {
         eventline::debug!(
-            "dbus: inhibit active (portal sender={}, total={}, sender_handles={}, handle={})",
+            "dbus: inhibit active (portal sender={}, total={}, sender_handles={}, sender_legacy={}, handle={})",
             sender,
             new_total,
             sender_handles,
+            sender_legacy,
             handle
         );
         sink.push(Event::BrowserActivity { now_ms: now_ms() });
     } else if newly_inserted {
         eventline::debug!(
-            "dbus: portal handle added (sender={}, total={}, sender_handles={}, handle={})",
+            "dbus: portal handle added (sender={}, total={}, sender_handles={}, sender_legacy={}, handle={})",
             sender,
             new_total,
             sender_handles,
+            sender_legacy,
             handle
         );
     }
@@ -301,11 +432,8 @@ async fn tracker_clear_portal_handle(
     sender: &str,
     handle: &str,
 ) {
-    // Check the runtime safeguard *before* mutating tracker state.
-    //
-    // If browser source-capture is still active, keep the portal handle tracked
-    // so we still have a future path to emit BrowserInactive when the real close
-    // edge arrives later (or the sender disappears).
+    // Keep the source-capture safeguard.
+    // Portal close is deferred while browser source capture is still active.
     let source_capture_active = tokio::task::spawn_blocking(browser_source_capture_active_now)
         .await
         .unwrap_or(false);
@@ -318,13 +446,19 @@ async fn tracker_clear_portal_handle(
             .get(sender)
             .map(|s| s.portal_handles.len())
             .unwrap_or(0);
+        let sender_legacy = t
+            .active_senders
+            .get(sender)
+            .map(|s| s.legacy_cookies.len())
+            .unwrap_or(0);
         drop(t);
 
         eventline::debug!(
-            "dbus: portal close deferred (browser source capture still active, sender={}, total={}, sender_handles={}, handle={})",
+            "dbus: portal close deferred (browser source capture still active, sender={}, total={}, sender_handles={}, sender_legacy={}, handle={})",
             sender,
             total,
             sender_handles,
+            sender_legacy,
             handle
         );
         return;
@@ -339,6 +473,11 @@ async fn tracker_clear_portal_handle(
         .get(sender)
         .map(|s| s.portal_handles.len())
         .unwrap_or(0);
+    let sender_legacy = t
+        .active_senders
+        .get(sender)
+        .map(|s| s.legacy_cookies.len())
+        .unwrap_or(0);
     drop(t);
 
     if removed && old_total > 0 && new_total == 0 {
@@ -350,10 +489,12 @@ async fn tracker_clear_portal_handle(
         sink.push(Event::BrowserInactive { now_ms: now_ms() });
     } else if removed {
         eventline::debug!(
-            "dbus: portal handle closed (sender={}, remaining_total={}, sender_handles={})",
+            "dbus: portal handle closed (sender={}, remaining_total={}, sender_handles={}, sender_legacy={}, handle={})",
             sender,
             new_total,
-            sender_handles
+            sender_handles,
+            sender_legacy,
+            handle
         );
     } else {
         eventline::debug!(
@@ -495,7 +636,8 @@ async fn spawn_dbus_inhibit_monitor(sink: Arc<dyn EventSink>) -> zbus::Result<()
                         || (iface == "org.gnome.sessionmanager" && member == "inhibit");
 
                     if legacy_inhibit_call {
-                        tracker_mark_legacy_active(&tracker, &sink, &sender).await;
+                        let serial = header.primary().serial_num().get();
+                        tracker_register_legacy_call(&tracker, &sender, serial).await;
                         continue;
                     }
 
@@ -504,11 +646,23 @@ async fn spawn_dbus_inhibit_monitor(sink: Arc<dyn EventSink>) -> zbus::Result<()
                         || (iface == "org.gnome.sessionmanager" && member == "uninhibit");
 
                     if legacy_uninhibit_call {
-                        tracker_clear_legacy(&tracker, &sink, &sender).await;
+                        let cookie: u32 = match msg.body().deserialize() {
+                            Ok(v) => v,
+                            Err(_) => {
+                                eventline::debug!(
+                                    "dbus: legacy uninhibit body parse failed (sender={}, iface={}, member={})",
+                                    sender,
+                                    iface,
+                                    member
+                                );
+                                continue;
+                            }
+                        };
+
+                        tracker_clear_legacy_cookie(&tracker, &sink, &sender, cookie).await;
                         continue;
                     }
 
-                    // Portal idle inhibit.
                     let portal_inhibit_call =
                         iface == "org.freedesktop.portal.inhibit" && member == "inhibit";
 
@@ -518,7 +672,6 @@ async fn spawn_dbus_inhibit_monitor(sink: Arc<dyn EventSink>) -> zbus::Result<()
                         continue;
                     }
 
-                    // XDG portal release path: apps close per-request handles via Request.Close.
                     if iface == "org.freedesktop.portal.request" && member == "close" {
                         let Some(path) = header.path() else {
                             continue;
@@ -538,22 +691,33 @@ async fn spawn_dbus_inhibit_monitor(sink: Arc<dyn EventSink>) -> zbus::Result<()
                     let sender = dest.as_str().to_string();
                     let reply_serial = reply_serial.get();
 
-                    let handle: zbus::zvariant::OwnedObjectPath = match msg.body().deserialize() {
-                        Ok(v) => v,
-                        Err(_) => {
-                            // Not a portal Inhibit return payload; ignore.
-                            continue;
-                        }
-                    };
+                    // Legacy APIs return a cookie (u32).
+                    if let Ok(cookie) = msg.body().deserialize::<u32>() {
+                        tracker_confirm_legacy_cookie(
+                            &tracker,
+                            &sink,
+                            &sender,
+                            reply_serial,
+                            cookie,
+                        )
+                        .await;
+                        continue;
+                    }
 
-                    tracker_confirm_portal_handle(
-                        &tracker,
-                        &sink,
-                        &sender,
-                        reply_serial,
-                        handle.as_str(),
-                    )
-                    .await;
+                    // Portal Inhibit returns a request-handle object path.
+                    if let Ok(handle) =
+                        msg.body().deserialize::<zbus::zvariant::OwnedObjectPath>()
+                    {
+                        tracker_confirm_portal_handle(
+                            &tracker,
+                            &sink,
+                            &sender,
+                            reply_serial,
+                            handle.as_str(),
+                        )
+                        .await;
+                        continue;
+                    }
                 }
 
                 zbus::message::Type::Error => {
@@ -564,7 +728,10 @@ async fn spawn_dbus_inhibit_monitor(sink: Arc<dyn EventSink>) -> zbus::Result<()
                         continue;
                     };
                     let sender = dest.as_str().to_string();
-                    tracker_clear_portal_call(&tracker, &sender, reply_serial.get()).await;
+                    let serial = reply_serial.get();
+
+                    tracker_clear_legacy_call(&tracker, &sender, serial).await;
+                    tracker_clear_portal_call(&tracker, &sender, serial).await;
                 }
 
                 zbus::message::Type::Signal => {
@@ -580,7 +747,6 @@ async fn spawn_dbus_inhibit_monitor(sink: Arc<dyn EventSink>) -> zbus::Result<()
                         }
                     }
                 }
-
             }
         }
     });
@@ -589,14 +755,13 @@ async fn spawn_dbus_inhibit_monitor(sink: Arc<dyn EventSink>) -> zbus::Result<()
     Ok(())
 }
 
-
 async fn run_dbus(
     sink: Arc<dyn EventSink>,
     enable_loginctl: bool,
     enable_dbus_inhibit: bool,
     mut shutdown: watch::Receiver<bool>,
 ) -> zbus::Result<()> {
-    eventline::info!("dbus: monitor logic rev=portal-handle-verify-v1");
+    eventline::info!("dbus: monitor logic rev=legacy-cookie-v1");
 
     let sys = match Connection::system().await {
         Ok(c) => Some(c),
@@ -628,7 +793,6 @@ async fn run_dbus(
 
     if let Some(sys) = sys.as_ref() {
         if enable_loginctl {
-            // 1) PrepareForSleep (login1 Manager)
             match Proxy::new(
                 sys,
                 "org.freedesktop.login1",
@@ -666,7 +830,6 @@ async fn run_dbus(
                 }
             }
 
-            // 2) Lock/Unlock (login1 Session)
             match get_current_session_path(sys).await {
                 Ok(session_path) => {
                     eventline::info!("D-Bus: monitoring session {}", session_path.as_str());
@@ -720,7 +883,6 @@ async fn run_dbus(
             eventline::info!("D-Bus: loginctl integration disabled; skipping login1 monitoring");
         }
 
-        // 3) Lid events via UPower PropertiesChanged
         {
             let rule = MatchRule::builder()
                 .msg_type(zbus::message::Type::Signal)
@@ -768,7 +930,6 @@ async fn run_dbus(
         eventline::warn!("D-Bus: system bus unavailable; login1/lid monitoring disabled");
     }
 
-    // Wait for shutdown; do NOT block forever.
     loop {
         if *shutdown.borrow() {
             break;
@@ -795,7 +956,6 @@ async fn get_current_session_path(
     )
     .await?;
 
-    // 1) XDG_SESSION_ID if present
     if let Ok(session_id) = std::env::var("XDG_SESSION_ID") {
         let result: zbus::Result<zbus::zvariant::OwnedObjectPath> =
             proxy.call("GetSession", &(session_id.as_str(),)).await;
@@ -806,7 +966,6 @@ async fn get_current_session_path(
         }
     }
 
-    // 2) Search ListSessions for our UID, prefer graphical seat0
     let uid: u32 = rustix::process::getuid().as_raw();
 
     let sessions: Vec<(String, u32, String, String, zbus::zvariant::OwnedObjectPath)> =
@@ -839,7 +998,6 @@ async fn get_current_session_path(
         }
     }
 
-    // 3) Fallback: first session for UID
     for (_session_id, session_uid, _username, _seat, path) in sessions {
         if session_uid == uid {
             eventline::warn!("D-Bus: using first session for UID {}", uid);
@@ -847,8 +1005,6 @@ async fn get_current_session_path(
         }
     }
 
-    // 4) Last-resort: PID method. Note: this will fail for processes running
-    // outside a logind session (e.g. systemd --user services on some compositors).
     let pid = std::process::id();
     let path: zbus::zvariant::OwnedObjectPath = proxy.call("GetSessionByPID", &(pid,)).await?;
     Ok(path)
@@ -862,18 +1018,31 @@ mod tests {
     fn portal_inhibit_stays_active_until_explicit_clear() {
         let mut tracker = DbusInhibitTracker::default();
         tracker.mark_portal_call(":1.26", 100);
-        tracker.confirm_portal_handle(":1.26", 100, "/org/freedesktop/portal/desktop/request/1_26/t/abc");
+        tracker.confirm_portal_handle(
+            ":1.26",
+            100,
+            "/org/freedesktop/portal/desktop/request/1_26/t/abc",
+        );
         assert_eq!(tracker.total(), 1);
 
-        // Repeated Inhibit calls from same sender should require matching clears.
         tracker.mark_portal_call(":1.26", 101);
-        tracker.confirm_portal_handle(":1.26", 101, "/org/freedesktop/portal/desktop/request/1_26/t/def");
+        tracker.confirm_portal_handle(
+            ":1.26",
+            101,
+            "/org/freedesktop/portal/desktop/request/1_26/t/def",
+        );
         assert_eq!(tracker.total(), 1);
 
-        tracker.clear_portal_handle(":1.26", "/org/freedesktop/portal/desktop/request/1_26/t/abc");
+        tracker.clear_portal_handle(
+            ":1.26",
+            "/org/freedesktop/portal/desktop/request/1_26/t/abc",
+        );
         assert_eq!(tracker.total(), 1);
 
-        tracker.clear_portal_handle(":1.26", "/org/freedesktop/portal/desktop/request/1_26/t/def");
+        tracker.clear_portal_handle(
+            ":1.26",
+            "/org/freedesktop/portal/desktop/request/1_26/t/def",
+        );
         assert_eq!(tracker.total(), 0);
     }
 
@@ -909,5 +1078,4 @@ Properties:
 "#;
         assert!(!stream_block_is_browser(block));
     }
-
 }
