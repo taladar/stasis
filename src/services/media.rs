@@ -275,6 +275,26 @@ impl MediaService {
     }
 }
 
+fn session_env_cmd(program: &str) -> Command {
+    let mut cmd = Command::new(program);
+    // Forward session env vars so pactl can reach PipeWire/PulseAudio when
+    // stasis is running as a systemd user service or otherwise outside the
+    // user session environment.
+    for var in &[
+        "PULSE_SERVER",
+        "PULSE_RUNTIME_PATH",
+        "XDG_RUNTIME_DIR",
+        "DBUS_SESSION_BUS_ADDRESS",
+        "WAYLAND_DISPLAY",
+        "DISPLAY",
+    ] {
+        if let Ok(val) = std::env::var(var) {
+            cmd.env(var, val);
+        }
+    }
+    cmd
+}
+
 fn detect_backend() -> MediaBackend {
     if pactl_available() {
         return MediaBackend::Pactl;
@@ -284,7 +304,7 @@ fn detect_backend() -> MediaBackend {
 }
 
 fn pactl_available() -> bool {
-    Command::new("pactl")
+    session_env_cmd("pactl")
         .arg("info")
         .output()
         .map(|o| o.status.success())
@@ -295,7 +315,7 @@ fn pactl_sink_input_count(
     ignore_remote_media: bool,
     media_blacklist: &[Pattern],
 ) -> Result<u64, String> {
-    let out = Command::new("pactl")
+    let out = session_env_cmd("pactl")
         .args(["list", "sink-inputs"])
         .output()
         .map_err(|e| format!("pactl spawn failed: {e}"))?;
@@ -460,7 +480,7 @@ fn sink_input_is_synthetic_or_tts(props: &HashMap<String, String>) -> bool {
         "accessibility",
     ];
 
-    haystack_contains_any(&sink_input_haystack(props), NEEDLES)
+    haystack_contains_any(&sink_input_identity_haystack(props), NEEDLES)
 }
 
 fn sink_input_is_systemish(props: &HashMap<String, String>) -> bool {
@@ -473,10 +493,12 @@ fn sink_input_is_systemish(props: &HashMap<String, String>) -> bool {
         "beep",
         "xdg-desktop-portal",
         "wireplumber",
-        "pipewire",
+        // "pipewire" intentionally omitted — matches "pipewire-pulse" in
+        // client.api on every PipeWire sink input; wireplumber covers the
+        // internal streams we actually want to exclude
     ];
 
-    haystack_contains_any(&sink_input_haystack(props), NEEDLES)
+    haystack_contains_any(&sink_input_identity_haystack(props), NEEDLES)
 }
 
 fn sink_input_is_blacklisted(
@@ -511,7 +533,7 @@ fn sink_input_is_browser(props: &HashMap<String, String>) -> bool {
         "librewolf",
     ];
 
-    haystack_contains_any(&sink_input_haystack(props), NEEDLES)
+    haystack_contains_any(&sink_input_identity_haystack(props), NEEDLES)
 }
 
 fn sink_input_is_game(props: &HashMap<String, String>) -> bool {
@@ -533,21 +555,19 @@ fn sink_input_is_game(props: &HashMap<String, String>) -> bool {
         "ryujinx",
     ];
 
-    haystack_contains_any(&sink_input_haystack(props), NEEDLES)
+    haystack_contains_any(&sink_input_identity_haystack(props), NEEDLES)
 }
 
 fn sink_input_is_remote(props: &HashMap<String, String>) -> bool {
     const NEEDLES: &[&str] = &[
         "spotify connect",
         "chromecast",
-        "cast",
         "airplay",
         "raop",
         "dlna",
         "upnp",
         "snapcast",
         "shairport",
-        "remote",
         "network stream",
         "http://",
         "https://",
@@ -557,7 +577,35 @@ fn sink_input_is_remote(props: &HashMap<String, String>) -> bool {
         "icy://",
     ];
 
-    haystack_contains_any(&sink_input_haystack(props), NEEDLES)
+    haystack_contains_any(&sink_input_identity_haystack(props), NEEDLES)
+}
+
+/// Haystack restricted to identity fields only (process binary, app name, etc).
+/// Use this for browser/game/systemish/tts/remote filters so that technical
+/// plumbing fields like `client.api = "pipewire-pulse"` can never cause false
+/// positives.
+fn sink_input_identity_haystack(props: &HashMap<String, String>) -> String {
+    let identity_keys = [
+        "application.name",
+        "application.process.binary",
+        "application.process.executable",
+        "application.icon_name",
+        "app.name",
+        "application.id",
+        "node.name",
+        "node.description",
+    ];
+
+    let mut parts = Vec::new();
+    for key in identity_keys {
+        if let Some(v) = props.get(key) {
+            if !v.trim().is_empty() {
+                parts.push(v.trim().to_string());
+            }
+        }
+    }
+
+    parts.join(" ").to_lowercase()
 }
 
 fn sink_input_haystack(props: &HashMap<String, String>) -> String {
