@@ -1,5 +1,5 @@
 // Author: Dustin Pilgrim
-// License: MIT
+// License: GPL-3.0-only
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {

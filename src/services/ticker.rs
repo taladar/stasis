@@ -1,5 +1,5 @@
 // Author: Dustin Pilgrim
-// License: MIT
+// License: GPL-3.0-only
 
 use crate::core::events::Event;
 use crate::core::manager_msg::ManagerMsg;

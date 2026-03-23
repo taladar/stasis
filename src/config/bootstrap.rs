@@ -1,5 +1,5 @@
 // Author: Dustin Pilgrim
-// License: MIT
+// License: GPL-3.0-only
 //
 // Description: Creates an initial ~/.config/stasis/stasis.rune on first run.
 // Chooses a desktop vs laptop template based on chassis detection.

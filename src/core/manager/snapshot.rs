@@ -1,5 +1,5 @@
 // Author: Dustin Pilgrim
-// License: MIT
+// License: GPL-3.0-only
 
 use crate::core::{
     info::{InfoSnapshot, WaybarInfo},

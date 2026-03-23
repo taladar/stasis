@@ -1,5 +1,5 @@
 // Author: Dustin Pilgrim
-// License: MIT
+// License: GPL-3.0-only
 
 use super::{AnyError, Daemon};
 use crate::core::{action::Action, events::Event, manager_msg::ManagerMsg};

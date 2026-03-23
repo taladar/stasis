@@ -1,5 +1,5 @@
 // Author: Dustin Pilgrim
-// License: GPLv3
+// License: GPL-3.0-only
 
 use rustix::fd::AsFd;
 use std::os::fd::BorrowedFd;

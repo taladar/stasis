@@ -1,5 +1,5 @@
 // Author: Dustin Pilgrim
-// License: MIT
+// License: GPL-3.0-only
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
