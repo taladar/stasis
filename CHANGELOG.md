@@ -26,6 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - On portal handle close edges, Stasis now applies a browser source-output guard before final inactive transitions.
   - This helps avoid mid-call inhibit drops when browser/portal close behavior is noisy.
 
+- **`stasis info` adds D-Bus inhibition info**
+  - Adds a line to the human-readable status/tooltip about the current state of D-Bus based inhibition.
+
 ### Notes
 
 - **Web Discord limitation (no mic attached)**
