@@ -71,6 +71,10 @@ fn render_status(state: &State, cfg_opt: Option<&Config>, now_ms: u64) -> String
     out.push_str(&format!("Paused: {}\n", yesno(state.paused())));
     out.push_str(&format!("Apps Inhibiting: {}\n", app));
     out.push_str(&format!("Media Players Playing: {}\n", media));
+    out.push_str(&format!(
+        "D-Bus Inhibiting: {}\n",
+        yesno(state.browser_activity_active(now_ms))
+    ));
 
     if let Some(cfg) = cfg_opt {
         if let Some(line) = next_step_line(cfg, state, now_ms) {
@@ -115,6 +119,10 @@ fn render_tooltip_compact(state: &State, cfg_opt: Option<&Config>, now_ms: u64) 
     t.push_str(&format!("Paused: {}\n", yesno(state.paused())));
     t.push_str(&format!("Apps Inhibiting: {}\n", app));
     t.push_str(&format!("Media Players Playing: {}\n", media));
+    t.push_str(&format!(
+        "D-Bus Inhibiting: {}\n",
+        yesno(state.browser_activity_active(now_ms))
+    ));
 
     if let Some(cfg) = cfg_opt {
         if let Some(line) = next_step_line(cfg, state, now_ms) {
